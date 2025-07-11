@@ -10,7 +10,7 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { 
-  Eye, 
+  FileText, 
   Download, 
   Play, 
   Square, 
@@ -20,28 +20,24 @@ import {
   XCircle
 } from 'lucide-react';
 
-const LogViewer = ({ pod, open, onClose }) => {
+const AggregateLogViewer = ({ containerName, open, onClose }) => {
   const [logs, setLogs] = useState([]);
-  const [selectedContainer, setSelectedContainer] = useState('');
   const [isFollowing, setIsFollowing] = useState(true);
   const [tailLines, setTailLines] = useState(100);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState('');
+  const [podCount, setPodCount] = useState(0);
   const eventSourceRef = useRef(null);
   const logsEndRef = useRef(null);
 
   useEffect(() => {
-    if (open && pod) {
-      // Set default container if not selected
-      if (!selectedContainer && pod.containers.length > 0) {
-        setSelectedContainer(pod.containers[0].name);
-      }
+    if (open && containerName) {
       startLogStream();
     }
     return () => {
       stopLogStream();
     };
-  }, [open, pod, selectedContainer, isFollowing, tailLines]);
+  }, [open, containerName, isFollowing, tailLines]);
 
   useEffect(() => {
     if (isFollowing && logsEndRef.current) {
@@ -50,22 +46,21 @@ const LogViewer = ({ pod, open, onClose }) => {
   }, [logs, isFollowing]);
 
   const startLogStream = () => {
-    if (!pod || !selectedContainer) return;
-    
     stopLogStream();
     
     setLogs([]);
     setError('');
     setIsConnected(false);
+    setPodCount(0);
 
     const params = new URLSearchParams({
-      container: selectedContainer,
+      containerName,
       follow: isFollowing.toString(),
       tailLines: tailLines.toString()
     });
 
     const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
-    const url = `${backendUrl}/api/pods/${pod.namespace}/${pod.name}/logs?${params}`;
+    const url = `${backendUrl}/api/logs/aggregate?${params}`;
     
     eventSourceRef.current = new EventSource(url);
 
@@ -76,7 +71,17 @@ const LogViewer = ({ pod, open, onClose }) => {
     eventSourceRef.current.addEventListener('connected', (event) => {
       const data = JSON.parse(event.data);
       setIsConnected(true);
-      console.log('Log stream connected:', data);
+      console.log('Aggregate log stream connected:', data);
+    });
+
+    eventSourceRef.current.addEventListener('info', (event) => {
+      const data = JSON.parse(event.data);
+      console.log('Info:', data.message);
+      // Extract pod count from message if available
+      const match = data.message.match(/(\d+) pods/);
+      if (match) {
+        setPodCount(parseInt(match[1]));
+      }
     });
 
     eventSourceRef.current.addEventListener('log', (event) => {
@@ -84,17 +89,11 @@ const LogViewer = ({ pod, open, onClose }) => {
       setLogs(prev => [...prev, logData]);
     });
 
-    eventSourceRef.current.addEventListener('close', (event) => {
-      const data = JSON.parse(event.data);
-      setIsConnected(false);
-      console.log('Log stream closed:', data);
-    });
-
     eventSourceRef.current.addEventListener('error', (event) => {
       try {
         const data = JSON.parse(event.data);
         setError(data.message);
-        console.error('Log stream error:', data);
+        console.error('Aggregate log stream error:', data);
       } catch (e) {
         console.error('Error parsing error event data:', e);
       }
@@ -103,7 +102,7 @@ const LogViewer = ({ pod, open, onClose }) => {
 
     eventSourceRef.current.onerror = (event) => {
       console.error('EventSource connection error:', event);
-      setError(`Connection to log stream failed. Pod: ${pod.name}, Container: ${selectedContainer}`);
+      setError(`Connection to aggregate log stream failed for container: ${containerName}`);
       setIsConnected(false);
     };
   };
@@ -120,21 +119,20 @@ const LogViewer = ({ pod, open, onClose }) => {
     setIsFollowing(!isFollowing);
   };
 
-  const handleContainerChange = (containerName) => {
-    setSelectedContainer(containerName);
-  };
-
   const handleTailLinesChange = (value) => {
     setTailLines(parseInt(value));
   };
 
   const downloadLogs = () => {
-    const logText = logs.map(log => `[${log.timestamp}] ${log.message}`).join('\n');
+    const logText = logs.map(log => 
+      `[${log.timestamp}] [${log.podName}/${log.namespace}] ${log.message}`
+    ).join('\n');
+    
     const blob = new Blob([logText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${pod.name}-${selectedContainer}-logs-${new Date().toISOString().slice(0, 19)}.txt`;
+    a.download = `aggregate-logs-${containerName}-${new Date().toISOString().slice(0, 19)}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -153,56 +151,67 @@ const LogViewer = ({ pod, open, onClose }) => {
     }
   };
 
+  const getPodColor = (podName) => {
+    // Generate a consistent color for each pod
+    const colors = [
+      'text-blue-400',
+      'text-green-400',
+      'text-purple-400',
+      'text-pink-400',
+      'text-indigo-400',
+      'text-teal-400',
+      'text-orange-400',
+      'text-cyan-400'
+    ];
+    let hash = 0;
+    for (let i = 0; i < podName.length; i++) {
+      hash = podName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
+  };
+
   const handleClose = () => {
     stopLogStream();
     onClose();
   };
 
-  if (!pod) return null;
+  if (!containerName) return null;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-6xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Eye className="h-5 w-5" />
-            Logs: {pod.name}
+            <FileText className="h-5 w-5" />
+            Aggregate Logs: {containerName}
           </DialogTitle>
           <DialogDescription>
-            Real-time logs from pod in {pod.namespace} namespace
+            Real-time logs from all pods containing the "{containerName}" container
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 flex flex-col space-y-4 min-h-0">
           {/* Connection Status and Controls */}
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center gap-2">
-              {isConnected ? (
-                <CheckCircle className="h-5 w-5 text-green-500" />
-              ) : (
-                <XCircle className="h-5 w-5 text-red-500" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                {isConnected ? (
+                  <CheckCircle className="h-5 w-5 text-green-500" />
+                ) : (
+                  <XCircle className="h-5 w-5 text-red-500" />
+                )}
+                <span className="text-sm font-medium">
+                  {isConnected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              {podCount > 0 && (
+                <div className="text-sm text-gray-600">
+                  Streaming from {podCount} pod{podCount !== 1 ? 's' : ''}
+                </div>
               )}
-              <span className="text-sm font-medium">
-                {isConnected ? 'Connected' : 'Disconnected'}
-              </span>
             </div>
             
             <div className="flex items-center gap-2">
-              {/* Container Selection */}
-              <Select value={selectedContainer} onValueChange={handleContainerChange}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Select container" />
-                </SelectTrigger>
-                <SelectContent>
-                  {pod.containers.map((container) => (
-                    <SelectItem key={container.name} value={container.name}>
-                      {container.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* Tail Lines */}
               <Select value={tailLines.toString()} onValueChange={handleTailLinesChange}>
                 <SelectTrigger className="w-32">
                   <SelectValue />
@@ -240,7 +249,7 @@ const LogViewer = ({ pod, open, onClose }) => {
                 variant="outline"
                 size="sm"
                 onClick={startLogStream}
-                disabled={!selectedContainer}
+                disabled={!containerName}
               >
                 <RefreshCw className="h-4 w-4 mr-1" />
                 Reconnect
@@ -281,6 +290,12 @@ const LogViewer = ({ pod, open, onClose }) => {
                         <span className="text-gray-500 whitespace-nowrap">
                           {new Date(log.timestamp).toLocaleTimeString()}
                         </span>
+                        <span className={`${getPodColor(log.podName)} whitespace-nowrap font-medium`}>
+                          [{log.podName}]
+                        </span>
+                        <span className="text-gray-400 whitespace-nowrap">
+                          {log.namespace}
+                        </span>
                         <span className={`${getLogLevelColor(log.level)} break-all`}>
                           {log.message}
                         </span>
@@ -296,8 +311,7 @@ const LogViewer = ({ pod, open, onClose }) => {
           {/* Footer */}
           <div className="flex items-center justify-between text-sm text-gray-500">
             <span>
-              Pod: {pod.name} | 
-              Container: {selectedContainer} | 
+              Container: {containerName} | 
               Lines: {logs.length} | 
               {isFollowing ? 'Following' : 'Paused'}
             </span>
@@ -311,4 +325,4 @@ const LogViewer = ({ pod, open, onClose }) => {
   );
 };
 
-export default LogViewer; 
+export default AggregateLogViewer; 

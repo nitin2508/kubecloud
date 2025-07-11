@@ -2,12 +2,20 @@
   "name": "kubecloud-client",
   "version": "0.1.0",
   "private": true,
-  "proxy": "http://localhost:5000",
+  "proxy": "http://localhost:5001",
   "dependencies": {
+    "@radix-ui/react-accordion": "^1.2.11",
+    "@radix-ui/react-dialog": "^1.1.14",
+    "@radix-ui/react-dropdown-menu": "^2.1.15",
+    "@radix-ui/react-select": "^2.2.5",
+    "@radix-ui/react-tabs": "^1.1.12",
+    "@radix-ui/react-toast": "^1.2.14",
+    "@radix-ui/react-tooltip": "^1.2.7",
     "@testing-library/jest-dom": "^5.16.4",
     "@testing-library/react": "^13.3.0",
     "@testing-library/user-event": "^13.5.0",
     "axios": "^1.4.0",
+    "lucide-react": "^0.525.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
@@ -36,5 +44,14 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.10",
+    "autoprefixer": "^10.4.21",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "postcss": "^8.5.6",
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss": "^3.4.17"
   }
-} 
+}

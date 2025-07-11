@@ -1,13 +1,46 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Badge } from './ui/badge';
+import { Network, Container, Zap } from 'lucide-react';
 
-const PortForwardDialog = ({ pod, onClose, onPortForward }) => {
+const PortForwardDialog = ({ pod, open, onClose, onPortForward }) => {
   const [selectedPort, setSelectedPort] = useState(null);
   const [localPort, setLocalPort] = useState('');
   const [customPort, setCustomPort] = useState('');
   const [useCustomPort, setUseCustomPort] = useState(false);
 
+  useEffect(() => {
+    if (open && pod) {
+      // Auto-populate the first available port
+      const ports = getAllPorts();
+      if (ports.length > 0) {
+        const firstPort = ports[0];
+        setSelectedPort(firstPort);
+        setLocalPort(firstPort.containerPort.toString());
+        setUseCustomPort(false);
+        setCustomPort('');
+      } else {
+        setSelectedPort(null);
+        setLocalPort('');
+        setUseCustomPort(false);
+        setCustomPort('');
+      }
+    }
+  }, [open, pod]);
+
   // Get all unique ports from all containers
   const getAllPorts = () => {
+    if (!pod) return [];
+    
     const ports = [];
     pod.containers.forEach(container => {
       if (container.ports) {
@@ -65,69 +98,134 @@ const PortForwardDialog = ({ pod, onClose, onPortForward }) => {
     onPortForward(pod.namespace, pod.name, containerPort, targetLocalPort);
   };
 
+  const handleClose = () => {
+    setSelectedPort(null);
+    setLocalPort('');
+    setCustomPort('');
+    setUseCustomPort(false);
+    onClose();
+  };
+
+  if (!pod) return null;
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3>Port Forward: {pod.name}</h3>
-          <button className="close-button" onClick={onClose}>×</button>
-        </div>
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Network className="h-5 w-5" />
+            Port Forward: {pod.name}
+          </DialogTitle>
+          <DialogDescription>
+            Forward a port from the pod to your local machine
+          </DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>Namespace: {pod.namespace}</label>
-          </div>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Pod Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Container className="h-4 w-4" />
+                Pod Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="font-medium">Name:</span> {pod.name}
+                </div>
+                <div>
+                  <span className="font-medium">Namespace:</span> 
+                  <Badge variant="outline" className="ml-2">{pod.namespace}</Badge>
+                </div>
+                <div>
+                  <span className="font-medium">Status:</span> 
+                  <Badge variant="secondary" className="ml-2">{pod.status}</Badge>
+                </div>
+                <div>
+                  <span className="font-medium">Ready:</span> 
+                  <span className={pod.ready ? 'text-green-600' : 'text-red-600'}>
+                    {pod.ready ? '✅ Yes' : '❌ No'}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
+          {/* Port Selection */}
           {ports.length > 0 && (
-            <div className="form-group">
-              <label>Select Container Port:</label>
-              <div className="port-options">
-                {ports.map((port, index) => (
-                  <div
-                    key={index}
-                    className={`port-option ${selectedPort === port ? 'selected' : ''}`}
-                    onClick={() => handlePortSelect(port)}
-                  >
-                    <h4>{port.containerPort}</h4>
-                    <p>{port.protocol}</p>
-                    <p><strong>Container:</strong> {port.containerName}</p>
-                    {port.name && <p><strong>Name:</strong> {port.name}</p>}
-                  </div>
-                ))}
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-3 block">
+                  Select Container Port:
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {ports.map((port, index) => (
+                    <Card
+                      key={index}
+                      className={`cursor-pointer transition-colors ${
+                        selectedPort === port 
+                          ? 'border-primary bg-primary/5' 
+                          : 'hover:border-gray-400'
+                      }`}
+                      onClick={() => handlePortSelect(port)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Zap className="h-4 w-4 text-gray-500" />
+                            <span className="font-medium text-lg">{port.containerPort}</span>
+                          </div>
+                          <Badge variant="outline">{port.protocol}</Badge>
+                        </div>
+                        <div className="mt-2 text-sm text-gray-600">
+                          <p>Container: {port.containerName}</p>
+                          {port.name && <p>Name: {port.name}</p>}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
               </div>
             </div>
           )}
 
-          <div className="form-group">
-            <label>
+          {/* Custom Port Option */}
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2">
               <input
                 type="checkbox"
+                id="custom-port"
                 checked={useCustomPort}
                 onChange={handleCustomPortToggle}
-                style={{ marginRight: '0.5rem' }}
+                className="rounded border-gray-300"
               />
-              Use custom container port
-            </label>
+              <label htmlFor="custom-port" className="text-sm font-medium">
+                Use custom container port
+              </label>
+            </div>
+
+            {useCustomPort && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Custom Container Port:</label>
+                <Input
+                  type="number"
+                  value={customPort}
+                  onChange={(e) => setCustomPort(e.target.value)}
+                  placeholder="Enter container port (1-65535)"
+                  min="1"
+                  max="65535"
+                  required
+                />
+              </div>
+            )}
           </div>
 
-          {useCustomPort && (
-            <div className="form-group">
-              <label>Custom Container Port:</label>
-              <input
-                type="number"
-                value={customPort}
-                onChange={(e) => setCustomPort(e.target.value)}
-                placeholder="Enter container port (1-65535)"
-                min="1"
-                max="65535"
-                required
-              />
-            </div>
-          )}
-
-          <div className="form-group">
-            <label>Local Port:</label>
-            <input
+          {/* Local Port */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Local Port:</label>
+            <Input
               type="number"
               value={localPort}
               onChange={(e) => setLocalPort(e.target.value)}
@@ -136,33 +234,39 @@ const PortForwardDialog = ({ pod, onClose, onPortForward }) => {
               max="65535"
               required
             />
-            <small style={{ color: '#666' }}>
+            <p className="text-xs text-gray-500">
               Port on localhost where the traffic will be forwarded
-            </small>
+            </p>
           </div>
 
-          <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
-            <strong>Port Forward Command:</strong>
-            <code style={{ display: 'block', marginTop: '0.5rem' }}>
-              kubectl port-forward -n {pod.namespace} pod/{pod.name} {localPort}:{useCustomPort ? customPort : selectedPort?.containerPort || 'PORT'}
-            </code>
-          </div>
+          {/* Command Preview */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Command Preview</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-gray-100 p-3 rounded-md font-mono text-sm">
+                kubectl port-forward -n {pod.namespace} pod/{pod.name} {localPort}:{useCustomPort ? customPort : selectedPort?.containerPort || 'PORT'}
+              </div>
+            </CardContent>
+          </Card>
 
-          <div className="form-actions">
-            <button type="button" onClick={onClose} className="btn">
+          {/* Action Buttons */}
+          <div className="flex justify-end space-x-2">
+            <Button type="button" variant="outline" onClick={handleClose}>
               Cancel
-            </button>
-            <button 
+            </Button>
+            <Button 
               type="submit" 
-              className="btn btn-success"
               disabled={!localPort || (!selectedPort && !useCustomPort) || (useCustomPort && !customPort)}
             >
+              <Network className="h-4 w-4 mr-2" />
               Start Port Forward
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 
