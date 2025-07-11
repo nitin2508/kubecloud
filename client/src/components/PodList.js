@@ -3,8 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Button } from './ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Badge } from './ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Input } from './ui/input';
+import { Combobox } from './ui/combobox';
 import { 
   Container, 
   Network, 
@@ -14,7 +14,8 @@ import {
   Settings,
   Layers,
   FileText,
-  Search
+  Search,
+  Users
 } from 'lucide-react';
 
 const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewAggregateLogs, onUpdateDeployment, onNamespaceChange }) => {
@@ -83,19 +84,11 @@ const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewA
     }
   };
 
-  const getUniqueContainerNames = () => {
-    const containerNames = new Set();
-    pods.forEach(pod => {
-      pod.containers.forEach(container => {
-        containerNames.add(container.name);
-      });
-    });
-    return Array.from(containerNames);
-  };
-
-  const handleViewAggregateLogs = (containerName) => {
-    onViewAggregateLogs?.(containerName);
-  };
+  // Prepare namespace options for the combobox
+  const namespaceOptions = [
+    { value: 'all', label: 'All Namespaces' },
+    ...namespaces.map(ns => ({ value: ns.name, label: ns.name }))
+  ];
 
   if (loading) {
     return (
@@ -109,8 +102,6 @@ const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewA
       </Card>
     );
   }
-
-  const uniqueContainers = getUniqueContainerNames();
 
   return (
     <div className="space-y-6">
@@ -140,19 +131,14 @@ const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewA
             
             {/* Namespace Filter */}
             <div className="w-full sm:w-64">
-              <Select value={selectedNamespace} onValueChange={handleNamespaceChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select namespace" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Namespaces</SelectItem>
-                  {namespaces.map((namespace) => (
-                    <SelectItem key={namespace.name} value={namespace.name}>
-                      {namespace.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Combobox
+                options={namespaceOptions}
+                value={selectedNamespace}
+                onValueChange={handleNamespaceChange}
+                placeholder="Select namespace"
+                searchPlaceholder="Search namespaces..."
+                emptyText="No namespaces found."
+              />
             </div>
           </div>
 
@@ -239,15 +225,47 @@ const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewA
                           <Network className="h-4 w-4 mr-1" />
                           Port Forward
                         </Button>
+                        
+                        {/* Individual Log Button */}
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => onViewLogs(pod)}
-                          title="View real-time logs"
+                          title="View individual pod logs"
                         >
                           <Eye className="h-4 w-4 mr-1" />
                           Logs
                         </Button>
+
+                        {/* Aggregate Log Button - only show if there are multiple pods with same container */}
+                        {pod.containers.some(container => {
+                          const podsWithSameContainer = pods.filter(p => 
+                            p.containers.some(c => c.name === container.name)
+                          );
+                          return podsWithSameContainer.length > 1;
+                        }) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              // Find the first container that has multiple pods
+                              const containerWithMultiplePods = pod.containers.find(container => {
+                                const podsWithSameContainer = pods.filter(p => 
+                                  p.containers.some(c => c.name === container.name)
+                                );
+                                return podsWithSameContainer.length > 1;
+                              });
+                              if (containerWithMultiplePods) {
+                                onViewAggregateLogs(containerWithMultiplePods.name);
+                              }
+                            }}
+                            title="View aggregated logs from all pods with same container"
+                          >
+                            <Users className="h-4 w-4 mr-1" />
+                            Aggregate
+                          </Button>
+                        )}
+
                         {onUpdateDeployment && (
                           <Button
                             variant="outline"
@@ -268,53 +286,6 @@ const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewA
           )}
         </CardContent>
       </Card>
-
-      {/* Aggregate Logs Section */}
-      {uniqueContainers.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Aggregate Logs
-            </CardTitle>
-            <CardDescription>
-              View logs from all pods with the same container name
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {uniqueContainers.map((containerName) => {
-                const podsWithContainer = pods.filter(pod => 
-                  pod.containers.some(container => container.name === containerName)
-                );
-                
-                return (
-                  <div key={containerName} className="p-4 border rounded-lg">
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="font-medium">{containerName}</h4>
-                      <Badge variant="secondary">
-                        {podsWithContainer.length} pod{podsWithContainer.length !== 1 ? 's' : ''}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-gray-500 mb-3">
-                      View aggregated logs from all pods with this container
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleViewAggregateLogs(containerName)}
-                      className="w-full"
-                    >
-                      <FileText className="h-4 w-4 mr-2" />
-                      View Aggregate Logs
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 };

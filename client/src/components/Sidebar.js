@@ -1,97 +1,115 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { Card, CardContent } from './ui/card';
+import React, { useState } from 'react';
 import { Button } from './ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
+import { Alert, AlertDescription } from './ui/alert';
 import { 
   Upload, 
   FileText, 
-  Trash2, 
   CheckCircle, 
+  Trash2, 
   Plus,
-  Settings,
-  Cloud
+  ChevronLeft,
+  ChevronRight,
+  Menu
 } from 'lucide-react';
 
-const Sidebar = ({ onKubeconfigChange, activeKubeconfig }) => {
-  const [kubeconfigs, setKubeconfigs] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
+const Sidebar = ({ 
+  kubeconfigs, 
+  activeKubeconfig, 
+  onUpload, 
+  onActivate, 
+  onDelete, 
+  isCollapsed, 
+  onToggleCollapse 
+}) => {
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadError, setUploadError] = useState('');
 
-  useEffect(() => {
-    fetchKubeconfigs();
-  }, []);
-
-  const fetchKubeconfigs = async () => {
-    try {
-      const response = await axios.get('/api/kubeconfigs');
-      setKubeconfigs(response.data);
-    } catch (error) {
-      console.error('Failed to fetch kubeconfigs:', error);
-    }
-  };
-
-  const handleFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setSelectedFile(file);
-      handleUpload(file);
-    }
-  };
-
-  const handleDragOver = (e) => {
+  const handleDrag = (e) => {
     e.preventDefault();
-    setDragOver(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setDragOver(false);
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
-    setDragOver(false);
-    
-    const files = e.dataTransfer.files;
+    e.stopPropagation();
+    setDragActive(false);
+    setUploadError('');
+
+    const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      setSelectedFile(files[0]);
-      handleUpload(files[0]);
+      handleFileUpload(files[0]);
     }
   };
 
-  const handleUpload = async (file) => {
+  const handleFileUpload = async (file) => {
     if (!file) return;
 
-    setUploading(true);
     try {
       const formData = new FormData();
       formData.append('kubeconfig', file);
 
-      await axios.post('/api/upload-kubeconfig', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/kubeconfig/upload`, {
+        method: 'POST',
+        body: formData,
       });
 
-      await fetchKubeconfigs();
-      setSelectedFile(null);
-      onKubeconfigChange?.();
+      const result = await response.json();
+      
+      if (response.ok) {
+        onUpload(result);
+        setUploadError('');
+      } else {
+        setUploadError(result.error || 'Upload failed');
+      }
     } catch (error) {
-      console.error('Failed to upload kubeconfig:', error);
-    } finally {
-      setUploading(false);
+      console.error('Upload error:', error);
+      setUploadError('Upload failed: ' + error.message);
     }
+  };
+
+  const handleFileInputChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+  };
+
+  const handleUploadClick = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.yaml,.yml,.config';
+    input.onchange = handleFileInputChange;
+    input.click();
   };
 
   const handleActivate = async (kubeconfigId) => {
     try {
-      await axios.post(`/api/kubeconfigs/${kubeconfigId}/activate`);
-      await fetchKubeconfigs();
-      onKubeconfigChange?.();
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/kubeconfig/activate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ kubeconfigId }),
+      });
+
+      const result = await response.json();
+      
+      if (response.ok) {
+        onActivate(result);
+      } else {
+        console.error('Activation failed:', result.error);
+      }
     } catch (error) {
-      console.error('Failed to activate kubeconfig:', error);
+      console.error('Activation error:', error);
     }
   };
 
@@ -101,135 +119,207 @@ const Sidebar = ({ onKubeconfigChange, activeKubeconfig }) => {
     }
 
     try {
-      await axios.delete(`/api/kubeconfigs/${kubeconfigId}`);
-      await fetchKubeconfigs();
-      onKubeconfigChange?.();
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/kubeconfig/${kubeconfigId}`, {
+        method: 'DELETE',
+      });
+
+      const result = await response.json();
+      
+      if (response.ok) {
+        onDelete(result);
+      } else {
+        console.error('Delete failed:', result.error);
+      }
     } catch (error) {
-      console.error('Failed to delete kubeconfig:', error);
+      console.error('Delete error:', error);
     }
   };
 
-  const formatDate = (date) => {
-    return new Date(date).toLocaleDateString();
-  };
-
   return (
-    <div className="w-80 h-full bg-white border-r border-gray-200 flex flex-col">
+    <div className={`bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ${
+      isCollapsed ? 'w-16' : 'w-80'
+    }`}>
       {/* Header */}
-      <div className="p-6 border-b border-gray-200">
-        <div className="flex items-center gap-3 mb-2">
-          <Cloud className="h-6 w-6 text-blue-600" />
-          <h2 className="text-xl font-bold text-gray-900">KubeCloud</h2>
-        </div>
-        <p className="text-sm text-gray-600">Kubernetes Management</p>
-      </div>
-
-      {/* Upload Section */}
-      <div className="p-4 border-b border-gray-200">
-        <div 
-          className={`border-2 border-dashed rounded-lg p-4 text-center transition-colors ${
-            dragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
+      <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        {!isCollapsed && (
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">KubeCloud</h1>
+            <p className="text-sm text-gray-500">Kubernetes Management</p>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleCollapse}
+          className="p-2"
         >
-          <Upload className="mx-auto h-8 w-8 text-gray-400 mb-2" />
-          <p className="text-xs text-gray-600 mb-2">
-            Drop kubeconfig here
-          </p>
-          <input
-            type="file"
-            id="kubeconfig-upload-sidebar"
-            onChange={handleFileSelect}
-            className="hidden"
-            accept=".yaml,.yml,.config"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={() => document.getElementById('kubeconfig-upload-sidebar').click()}
-            disabled={uploading}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            {uploading ? 'Uploading...' : 'Add Config'}
-          </Button>
-        </div>
-      </div>
-
-      {/* Kubeconfigs List */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-4">
-          <h3 className="text-sm font-medium text-gray-900 mb-3">
-            Configurations ({kubeconfigs.length})
-          </h3>
-          
-          {kubeconfigs.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <FileText className="mx-auto h-12 w-12 mb-4 text-gray-300" />
-              <p className="text-sm">No configurations</p>
-              <p className="text-xs">Upload your first kubeconfig</p>
-            </div>
+          {isCollapsed ? (
+            <ChevronRight className="h-4 w-4" />
           ) : (
-            <div className="space-y-2">
-              {kubeconfigs.map((config) => (
-                <Card
-                  key={config.id}
-                  className={`cursor-pointer transition-colors ${
-                    config.isActive 
-                      ? 'border-blue-500 bg-blue-50' 
-                      : 'hover:border-gray-400'
-                  }`}
-                  onClick={() => !config.isActive && handleActivate(config.id)}
-                >
-                  <CardContent className="p-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          {config.isActive && <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />}
-                          <h4 className="font-medium text-sm truncate">
-                            {config.name}
-                          </h4>
-                        </div>
-                        <div className="text-xs text-gray-500 space-y-1">
-                          <p className="truncate">Cluster: {config.clusterName}</p>
-                          <p className="truncate">Context: {config.currentContext}</p>
-                          <p>Added: {formatDate(config.uploadedAt)}</p>
-                        </div>
-                        {config.isActive && (
-                          <Badge variant="secondary" className="mt-2 text-xs">
-                            Active
-                          </Badge>
-                        )}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(config.id);
-                        }}
-                        className="text-red-600 hover:text-red-700 p-1 h-auto"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+            <ChevronLeft className="h-4 w-4" />
           )}
-        </div>
+        </Button>
       </div>
 
-      {/* Footer */}
-      <div className="p-4 border-t border-gray-200">
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <Settings className="h-3 w-3" />
-          <span>Kubernetes Dashboard</span>
+      {/* Collapsed state - show only icons */}
+      {isCollapsed && (
+        <div className="flex-1 p-2 space-y-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleUploadClick}
+            className="w-full p-2 h-auto"
+            title="Upload Kubeconfig"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+          
+          {kubeconfigs.map((config) => (
+            <Button
+              key={config.id}
+              variant={config.id === activeKubeconfig?.id ? "default" : "ghost"}
+              size="sm"
+              onClick={() => handleActivate(config.id)}
+              className="w-full p-2 h-auto"
+              title={config.name}
+            >
+              <FileText className="h-4 w-4" />
+            </Button>
+          ))}
         </div>
-      </div>
+      )}
+
+      {/* Expanded state - show full content */}
+      {!isCollapsed && (
+        <div className="flex-1 overflow-y-auto">
+          {/* Upload Section */}
+          <div className="p-4 space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold mb-3">Kubeconfig Files</h2>
+              
+              {/* Upload Area */}
+              <div
+                className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                  dragActive 
+                    ? 'border-blue-500 bg-blue-50' 
+                    : 'border-gray-300 hover:border-gray-400'
+                }`}
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+              >
+                <Upload className="mx-auto h-8 w-8 text-gray-400 mb-3" />
+                <p className="text-sm text-gray-600 mb-2">
+                  Drag & drop kubeconfig files here
+                </p>
+                <p className="text-xs text-gray-500 mb-3">
+                  or click to browse
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleUploadClick}
+                  className="w-full"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Choose Files
+                </Button>
+              </div>
+
+              {uploadError && (
+                <Alert className="mt-3 border-red-200 bg-red-50">
+                  <AlertDescription className="text-red-700">
+                    {uploadError}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+
+            {/* Kubeconfig List */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium text-gray-700">
+                Available Configs ({kubeconfigs.length})
+              </h3>
+              
+              {kubeconfigs.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <FileText className="mx-auto h-8 w-8 mb-2 opacity-50" />
+                  <p className="text-sm">No kubeconfig files uploaded</p>
+                  <p className="text-xs mt-1">Upload a file to get started</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {kubeconfigs.map((config) => (
+                    <Card 
+                      key={config.id} 
+                      className={`cursor-pointer transition-all ${
+                        config.id === activeKubeconfig?.id 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <CardContent className="p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <FileText className="h-4 w-4 text-gray-600" />
+                              <span className="text-sm font-medium truncate">
+                                {config.name}
+                              </span>
+                              {config.id === activeKubeconfig?.id && (
+                                <Badge variant="default" className="text-xs">
+                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                  Active
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 truncate">
+                              {config.contextName || 'No context'}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                              {new Date(config.uploadedAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 ml-2">
+                            {config.id !== activeKubeconfig?.id && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleActivate(config.id);
+                                }}
+                                className="h-6 w-6 p-0"
+                                title="Activate"
+                              >
+                                <CheckCircle className="h-3 w-3" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(config.id);
+                              }}
+                              className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

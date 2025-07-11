@@ -17,7 +17,8 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCircle,
-  XCircle
+  XCircle,
+  ArrowDown
 } from 'lucide-react';
 
 const LogViewer = ({ pod, open, onClose }) => {
@@ -27,8 +28,10 @@ const LogViewer = ({ pod, open, onClose }) => {
   const [tailLines, setTailLines] = useState(100);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState('');
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const eventSourceRef = useRef(null);
   const logsEndRef = useRef(null);
+  const logContainerRef = useRef(null);
 
   useEffect(() => {
     if (open && pod) {
@@ -44,10 +47,28 @@ const LogViewer = ({ pod, open, onClose }) => {
   }, [open, pod, selectedContainer, isFollowing, tailLines]);
 
   useEffect(() => {
-    if (isFollowing && logsEndRef.current) {
+    // Only auto-scroll if user is at the bottom and following is enabled
+    if (isFollowing && isAtBottom && logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs, isFollowing]);
+  }, [logs, isFollowing, isAtBottom]);
+
+  // Monitor scroll position to determine if user is at bottom
+  const handleScroll = () => {
+    if (logContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = logContainerRef.current;
+      const threshold = 50; // pixels from bottom
+      const atBottom = scrollHeight - scrollTop - clientHeight < threshold;
+      setIsAtBottom(atBottom);
+    }
+  };
+
+  const scrollToBottom = () => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      setIsAtBottom(true);
+    }
+  };
 
   const startLogStream = () => {
     if (!pod || !selectedContainer) return;
@@ -118,6 +139,10 @@ const LogViewer = ({ pod, open, onClose }) => {
 
   const toggleFollow = () => {
     setIsFollowing(!isFollowing);
+    if (!isFollowing) {
+      // If enabling follow, scroll to bottom
+      scrollToBottom();
+    }
   };
 
   const handleContainerChange = (containerName) => {
@@ -185,6 +210,17 @@ const LogViewer = ({ pod, open, onClose }) => {
               <span className="text-sm font-medium">
                 {isConnected ? 'Connected' : 'Disconnected'}
               </span>
+              {!isAtBottom && isFollowing && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={scrollToBottom}
+                  className="ml-4"
+                >
+                  <ArrowDown className="h-4 w-4 mr-1" />
+                  Go to bottom
+                </Button>
+              )}
             </div>
             
             <div className="flex items-center gap-2">
@@ -223,7 +259,7 @@ const LogViewer = ({ pod, open, onClose }) => {
                 className={isFollowing ? 'bg-green-50' : ''}
               >
                 {isFollowing ? <Square className="h-4 w-4 mr-1" /> : <Play className="h-4 w-4 mr-1" />}
-                {isFollowing ? 'Stop' : 'Follow'}
+                {isFollowing ? 'Stop Follow' : 'Follow'}
               </Button>
               
               <Button
@@ -269,7 +305,11 @@ const LogViewer = ({ pod, open, onClose }) => {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="h-96 overflow-y-auto bg-gray-900 text-white font-mono text-sm">
+              <div 
+                ref={logContainerRef}
+                className="h-96 overflow-y-auto bg-gray-900 text-white font-mono text-sm"
+                onScroll={handleScroll}
+              >
                 {logs.length === 0 ? (
                   <div className="flex items-center justify-center h-full text-gray-400">
                     {isConnected ? 'Waiting for log entries...' : 'Not connected'}
@@ -299,7 +339,8 @@ const LogViewer = ({ pod, open, onClose }) => {
               Pod: {pod.name} | 
               Container: {selectedContainer} | 
               Lines: {logs.length} | 
-              {isFollowing ? 'Following' : 'Paused'}
+              {isFollowing ? 'Following' : 'Paused'} | 
+              {isAtBottom ? 'At bottom' : 'Scrolled up'}
             </span>
             <Button variant="outline" onClick={handleClose}>
               Close

@@ -5,6 +5,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 const k8s = require('@kubernetes/client-node');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -34,8 +35,9 @@ let kubeconfigFiles = [];
 let activeKubeconfig = null;
 let k8sApi = null;
 
-// Store active log streams
+// Store active log streams and port forwards
 const activeLogStreams = new Map();
+const activePortForwards = new Map();
 
 // Helper function to initialize Kubernetes client
 function initializeK8sClient(kubeconfigPath) {
@@ -118,7 +120,34 @@ loadExistingKubeconfigs();
 
 // Routes
 
-// Get all kubeconfigs
+// Get all kubeconfigs with active status
+app.get('/api/kubeconfig/list', (req, res) => {
+  try {
+    const configs = kubeconfigFiles.map(config => ({
+      id: config.id,
+      name: config.name,
+      contextName: config.currentContext,
+      uploadedAt: config.uploadedAt
+    }));
+    
+    const active = kubeconfigFiles.find(config => config.path === activeKubeconfig);
+    
+    res.json({
+      kubeconfigs: configs,
+      active: active ? {
+        id: active.id,
+        name: active.name,
+        contextName: active.currentContext,
+        uploadedAt: active.uploadedAt
+      } : null
+    });
+  } catch (error) {
+    console.error('Error fetching kubeconfigs:', error);
+    res.status(500).json({ error: 'Failed to fetch kubeconfigs' });
+  }
+});
+
+// Get all kubeconfigs (legacy endpoint)
 app.get('/api/kubeconfigs', (req, res) => {
   const configs = kubeconfigFiles.map(config => ({
     ...config,
@@ -128,6 +157,62 @@ app.get('/api/kubeconfigs', (req, res) => {
 });
 
 // Upload kubeconfig
+app.post('/api/kubeconfig/upload', upload.single('kubeconfig'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No kubeconfig file uploaded' });
+    }
+
+    const kubeconfigPath = req.file.path;
+    const info = getKubeconfigInfo(kubeconfigPath);
+    
+    if (!info) {
+      fs.unlinkSync(kubeconfigPath); // Clean up invalid file
+      return res.status(400).json({ error: 'Invalid kubeconfig file' });
+    }
+
+    const newConfig = {
+      id: req.file.filename,
+      name: req.file.originalname,
+      path: kubeconfigPath,
+      uploadedAt: new Date(),
+      ...info
+    };
+
+    kubeconfigFiles.push(newConfig);
+
+    // If this is the first kubeconfig, make it active
+    if (kubeconfigFiles.length === 1) {
+      initializeK8sClient(kubeconfigPath);
+    }
+
+    // Return the updated list
+    const configs = kubeconfigFiles.map(config => ({
+      id: config.id,
+      name: config.name,
+      contextName: config.currentContext,
+      uploadedAt: config.uploadedAt
+    }));
+    
+    const active = kubeconfigFiles.find(config => config.path === activeKubeconfig);
+
+    res.json({
+      message: 'Kubeconfig uploaded successfully',
+      kubeconfigs: configs,
+      active: active ? {
+        id: active.id,
+        name: active.name,
+        contextName: active.currentContext,
+        uploadedAt: active.uploadedAt
+      } : null
+    });
+  } catch (error) {
+    console.error('Error uploading kubeconfig:', error);
+    res.status(500).json({ error: 'Failed to upload kubeconfig' });
+  }
+});
+
+// Legacy upload endpoint
 app.post('/api/upload-kubeconfig', upload.single('kubeconfig'), async (req, res) => {
   try {
     if (!req.file) {
@@ -167,7 +252,49 @@ app.post('/api/upload-kubeconfig', upload.single('kubeconfig'), async (req, res)
   }
 });
 
-// Set active kubeconfig
+// Activate kubeconfig
+app.post('/api/kubeconfig/activate', (req, res) => {
+  try {
+    const { kubeconfigId } = req.body;
+    const config = kubeconfigFiles.find(c => c.id === kubeconfigId);
+    
+    if (!config) {
+      return res.status(404).json({ error: 'Kubeconfig not found' });
+    }
+
+    const success = initializeK8sClient(config.path);
+    
+    if (!success) {
+      return res.status(400).json({ error: 'Failed to activate kubeconfig' });
+    }
+
+    // Return the updated list
+    const configs = kubeconfigFiles.map(config => ({
+      id: config.id,
+      name: config.name,
+      contextName: config.currentContext,
+      uploadedAt: config.uploadedAt
+    }));
+    
+    const active = kubeconfigFiles.find(config => config.path === activeKubeconfig);
+
+    res.json({
+      message: 'Kubeconfig activated successfully',
+      kubeconfigs: configs,
+      active: active ? {
+        id: active.id,
+        name: active.name,
+        contextName: active.currentContext,
+        uploadedAt: active.uploadedAt
+      } : null
+    });
+  } catch (error) {
+    console.error('Error activating kubeconfig:', error);
+    res.status(500).json({ error: 'Failed to activate kubeconfig' });
+  }
+});
+
+// Set active kubeconfig (legacy endpoint)
 app.post('/api/kubeconfigs/:id/activate', (req, res) => {
   try {
     const { id } = req.params;
@@ -191,6 +318,62 @@ app.post('/api/kubeconfigs/:id/activate', (req, res) => {
 });
 
 // Delete kubeconfig
+app.delete('/api/kubeconfig/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const configIndex = kubeconfigFiles.findIndex(c => c.id === id);
+    
+    if (configIndex === -1) {
+      return res.status(404).json({ error: 'Kubeconfig not found' });
+    }
+
+    const config = kubeconfigFiles[configIndex];
+    
+    // If this is the active kubeconfig, deactivate it
+    if (config.path === activeKubeconfig) {
+      activeKubeconfig = null;
+      k8sApi = null;
+      
+      // Activate another kubeconfig if available
+      const remainingConfigs = kubeconfigFiles.filter((_, index) => index !== configIndex);
+      if (remainingConfigs.length > 0) {
+        initializeK8sClient(remainingConfigs[0].path);
+      }
+    }
+
+    // Delete the file
+    fs.unlinkSync(config.path);
+    
+    // Remove from array
+    kubeconfigFiles.splice(configIndex, 1);
+
+    // Return the updated list
+    const configs = kubeconfigFiles.map(config => ({
+      id: config.id,
+      name: config.name,
+      contextName: config.currentContext,
+      uploadedAt: config.uploadedAt
+    }));
+    
+    const active = kubeconfigFiles.find(config => config.path === activeKubeconfig);
+
+    res.json({
+      message: 'Kubeconfig deleted successfully',
+      kubeconfigs: configs,
+      active: active ? {
+        id: active.id,
+        name: active.name,
+        contextName: active.currentContext,
+        uploadedAt: active.uploadedAt
+      } : null
+    });
+  } catch (error) {
+    console.error('Error deleting kubeconfig:', error);
+    res.status(500).json({ error: 'Failed to delete kubeconfig' });
+  }
+});
+
+// Delete kubeconfig (legacy endpoint)
 app.delete('/api/kubeconfigs/:id', (req, res) => {
   try {
     const { id } = req.params;
@@ -241,7 +424,7 @@ app.get('/api/namespaces', async (req, res) => {
       creationTimestamp: ns.metadata.creationTimestamp
     }));
 
-    res.json(namespaces);
+    res.json({ namespaces });
   } catch (error) {
     console.error('Error fetching namespaces:', error);
     res.status(500).json({ error: 'Failed to fetch namespaces' });
@@ -272,21 +455,28 @@ app.get('/api/namespaces/:namespace/pods', async (req, res) => {
       labels: pod.metadata.labels || {}
     }));
 
-    res.json(pods);
+    res.json({ pods });
   } catch (error) {
     console.error('Error fetching pods:', error);
     res.status(500).json({ error: 'Failed to fetch pods' });
   }
 });
 
-// Get all pods (across all namespaces)
+// Get all pods (across all namespaces or filtered by namespace)
 app.get('/api/pods', async (req, res) => {
   try {
     if (!k8sApi) {
       return res.status(400).json({ error: 'No kubeconfig loaded' });
     }
 
-    const response = await k8sApi.core.listPodForAllNamespaces();
+    const { namespace } = req.query;
+    let response;
+    
+    if (namespace) {
+      response = await k8sApi.core.listNamespacedPod(namespace);
+    } else {
+      response = await k8sApi.core.listPodForAllNamespaces();
+    }
     
     const pods = response.body.items.map(pod => ({
       name: pod.metadata.name,
@@ -302,9 +492,9 @@ app.get('/api/pods', async (req, res) => {
       labels: pod.metadata.labels || {}
     }));
 
-    res.json(pods);
+    res.json({ pods });
   } catch (error) {
-    console.error('Error fetching all pods:', error);
+    console.error('Error fetching pods:', error);
     res.status(500).json({ error: 'Failed to fetch pods' });
   }
 });
@@ -631,11 +821,41 @@ app.post('/api/port-forward', async (req, res) => {
       return res.status(400).json({ error: 'No kubeconfig loaded' });
     }
 
-    const { namespace, podName, containerPort, localPort } = req.body;
+    const { namespace, podName, containerName, containerPort, localPort } = req.body;
 
     if (!namespace || !podName || !containerPort || !localPort) {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
+
+    // Check if local port is already in use
+    const existingPortForward = Array.from(activePortForwards.values()).find(
+      pf => pf.localPort === localPort && pf.status === 'active'
+    );
+    
+    if (existingPortForward) {
+      return res.status(400).json({ 
+        error: `Port ${localPort} is already in use by another port forward` 
+      });
+    }
+
+    // Generate unique ID for this port forward
+    const portForwardId = uuidv4();
+    
+    // Create port forward entry
+    const portForward = {
+      id: portForwardId,
+      namespace,
+      podName,
+      containerName: containerName || 'default',
+      containerPort,
+      localPort,
+      status: 'starting',
+      createdAt: new Date().toISOString(),
+      process: null
+    };
+
+    // Store the port forward
+    activePortForwards.set(portForwardId, portForward);
 
     // Use kubectl port-forward command
     const command = 'kubectl';
@@ -647,34 +867,61 @@ app.post('/api/port-forward', async (req, res) => {
       `${localPort}:${containerPort}`
     ];
 
-    const portForward = spawn(command, args, {
+    const portForwardProcess = spawn(command, args, {
       stdio: 'pipe',
-      detached: true
+      detached: false
     });
+
+    // Update the port forward with the process
+    portForward.process = portForwardProcess;
 
     let output = '';
     let errorOutput = '';
 
-    portForward.stdout.on('data', (data) => {
+    portForwardProcess.stdout.on('data', (data) => {
       output += data.toString();
+      // Check if port forward is ready
+      if (data.toString().includes('Forwarding from')) {
+        portForward.status = 'active';
+        activePortForwards.set(portForwardId, portForward);
+      }
     });
 
-    portForward.stderr.on('data', (data) => {
+    portForwardProcess.stderr.on('data', (data) => {
       errorOutput += data.toString();
+    });
+
+    portForwardProcess.on('close', (code) => {
+      console.log(`Port forward ${portForwardId} closed with code ${code}`);
+      portForward.status = 'stopped';
+      activePortForwards.set(portForwardId, portForward);
+    });
+
+    portForwardProcess.on('error', (error) => {
+      console.error(`Port forward ${portForwardId} error:`, error);
+      portForward.status = 'error';
+      activePortForwards.set(portForwardId, portForward);
     });
 
     // Give it a moment to start
     setTimeout(() => {
-      if (portForward.pid) {
+      if (portForwardProcess.pid) {
         res.json({ 
           message: `Port forwarding started: localhost:${localPort} -> ${podName}:${containerPort}`,
-          pid: portForward.pid,
-          localPort,
-          containerPort,
-          podName,
-          namespace
+          portForward: {
+            id: portForwardId,
+            namespace,
+            podName,
+            containerName: containerName || 'default',
+            containerPort,
+            localPort,
+            status: 'active',
+            createdAt: portForward.createdAt
+          }
         });
       } else {
+        // Remove failed port forward
+        activePortForwards.delete(portForwardId);
         res.status(500).json({ error: 'Failed to start port forwarding', details: errorOutput });
       }
     }, 1000);
@@ -682,6 +929,183 @@ app.post('/api/port-forward', async (req, res) => {
   } catch (error) {
     console.error('Error starting port forward:', error);
     res.status(500).json({ error: 'Failed to start port forwarding' });
+  }
+});
+
+// Get all port forwards
+app.get('/api/port-forwards', (req, res) => {
+  try {
+    const portForwards = Array.from(activePortForwards.values()).map(pf => ({
+      id: pf.id,
+      namespace: pf.namespace,
+      podName: pf.podName,
+      containerName: pf.containerName,
+      containerPort: pf.containerPort,
+      localPort: pf.localPort,
+      status: pf.status,
+      createdAt: pf.createdAt
+    }));
+    
+    res.json({ portForwards });
+  } catch (error) {
+    console.error('Error fetching port forwards:', error);
+    res.status(500).json({ error: 'Failed to fetch port forwards' });
+  }
+});
+
+// Start a stopped port forward
+app.post('/api/port-forwards/:id/start', (req, res) => {
+  try {
+    const { id } = req.params;
+    const portForward = activePortForwards.get(id);
+    
+    if (!portForward) {
+      return res.status(404).json({ error: 'Port forward not found' });
+    }
+    
+    if (portForward.status === 'active') {
+      return res.status(400).json({ error: 'Port forward is already active' });
+    }
+    
+    // Check if local port is already in use
+    const existingPortForward = Array.from(activePortForwards.values()).find(
+      pf => pf.localPort === portForward.localPort && pf.status === 'active' && pf.id !== id
+    );
+    
+    if (existingPortForward) {
+      return res.status(400).json({ 
+        error: `Port ${portForward.localPort} is already in use by another port forward` 
+      });
+    }
+
+    // Kill existing process if it exists
+    if (portForward.process && !portForward.process.killed) {
+      portForward.process.kill();
+    }
+
+    // Start new process
+    const command = 'kubectl';
+    const args = [
+      '--kubeconfig', activeKubeconfig,
+      'port-forward',
+      `-n`, portForward.namespace,
+      `pod/${portForward.podName}`,
+      `${portForward.localPort}:${portForward.containerPort}`
+    ];
+
+    const portForwardProcess = spawn(command, args, {
+      stdio: 'pipe',
+      detached: false
+    });
+
+    portForward.process = portForwardProcess;
+    portForward.status = 'starting';
+
+    portForwardProcess.stdout.on('data', (data) => {
+      if (data.toString().includes('Forwarding from')) {
+        portForward.status = 'active';
+        activePortForwards.set(id, portForward);
+      }
+    });
+
+    portForwardProcess.on('close', (code) => {
+      console.log(`Port forward ${id} closed with code ${code}`);
+      portForward.status = 'stopped';
+      activePortForwards.set(id, portForward);
+    });
+
+    portForwardProcess.on('error', (error) => {
+      console.error(`Port forward ${id} error:`, error);
+      portForward.status = 'error';
+      activePortForwards.set(id, portForward);
+    });
+
+    activePortForwards.set(id, portForward);
+    
+    res.json({ 
+      message: 'Port forward started successfully',
+      portForward: {
+        id: portForward.id,
+        namespace: portForward.namespace,
+        podName: portForward.podName,
+        containerName: portForward.containerName,
+        containerPort: portForward.containerPort,
+        localPort: portForward.localPort,
+        status: portForward.status,
+        createdAt: portForward.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error starting port forward:', error);
+    res.status(500).json({ error: 'Failed to start port forward' });
+  }
+});
+
+// Stop a port forward
+app.post('/api/port-forwards/:id/stop', (req, res) => {
+  try {
+    const { id } = req.params;
+    const portForward = activePortForwards.get(id);
+    
+    if (!portForward) {
+      return res.status(404).json({ error: 'Port forward not found' });
+    }
+    
+    if (portForward.status !== 'active') {
+      return res.status(400).json({ error: 'Port forward is not active' });
+    }
+    
+    // Kill the process
+    if (portForward.process && !portForward.process.killed) {
+      portForward.process.kill();
+    }
+    
+    portForward.status = 'stopped';
+    activePortForwards.set(id, portForward);
+    
+    res.json({ 
+      message: 'Port forward stopped successfully',
+      portForward: {
+        id: portForward.id,
+        namespace: portForward.namespace,
+        podName: portForward.podName,
+        containerName: portForward.containerName,
+        containerPort: portForward.containerPort,
+        localPort: portForward.localPort,
+        status: portForward.status,
+        createdAt: portForward.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Error stopping port forward:', error);
+    res.status(500).json({ error: 'Failed to stop port forward' });
+  }
+});
+
+// Delete a port forward
+app.delete('/api/port-forwards/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const portForward = activePortForwards.get(id);
+    
+    if (!portForward) {
+      return res.status(404).json({ error: 'Port forward not found' });
+    }
+    
+    // Kill the process if it's running
+    if (portForward.process && !portForward.process.killed) {
+      portForward.process.kill();
+    }
+    
+    // Remove from active port forwards
+    activePortForwards.delete(id);
+    
+    res.json({ 
+      message: 'Port forward deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting port forward:', error);
+    res.status(500).json({ error: 'Failed to delete port forward' });
   }
 });
 
@@ -698,23 +1122,45 @@ app.get('/api/health', (req, res) => {
 // Cleanup on exit
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM, cleaning up...');
+  
+  // Clean up log streams
   activeLogStreams.forEach((process, streamId) => {
     if (process && !process.killed) {
       process.kill();
     }
   });
   activeLogStreams.clear();
+  
+  // Clean up port forwards
+  activePortForwards.forEach((portForward, id) => {
+    if (portForward.process && !portForward.process.killed) {
+      portForward.process.kill();
+    }
+  });
+  activePortForwards.clear();
+  
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('Received SIGINT, cleaning up...');
+  
+  // Clean up log streams
   activeLogStreams.forEach((process, streamId) => {
     if (process && !process.killed) {
       process.kill();
     }
   });
   activeLogStreams.clear();
+  
+  // Clean up port forwards
+  activePortForwards.forEach((portForward, id) => {
+    if (portForward.process && !portForward.process.killed) {
+      portForward.process.kill();
+    }
+  });
+  activePortForwards.clear();
+  
   process.exit(0);
 });
 

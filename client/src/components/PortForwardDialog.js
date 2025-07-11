@@ -8,263 +8,198 @@ import {
 } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { Badge } from './ui/badge';
-import { Network, Container, Zap } from 'lucide-react';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Alert, AlertDescription } from './ui/alert';
+import { Network, AlertCircle } from 'lucide-react';
 
-const PortForwardDialog = ({ pod, open, onClose, onPortForward }) => {
-  const [selectedPort, setSelectedPort] = useState(null);
+const PortForwardDialog = ({ pod, open, onClose, onSuccess }) => {
+  const [selectedContainer, setSelectedContainer] = useState('');
+  const [selectedPort, setSelectedPort] = useState('');
   const [localPort, setLocalPort] = useState('');
-  const [customPort, setCustomPort] = useState('');
-  const [useCustomPort, setUseCustomPort] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (open && pod) {
-      // Auto-populate the first available port
-      const ports = getAllPorts();
-      if (ports.length > 0) {
-        const firstPort = ports[0];
-        setSelectedPort(firstPort);
-        setLocalPort(firstPort.containerPort.toString());
-        setUseCustomPort(false);
-        setCustomPort('');
-      } else {
-        setSelectedPort(null);
-        setLocalPort('');
-        setUseCustomPort(false);
-        setCustomPort('');
+      // Reset form
+      setSelectedContainer('');
+      setSelectedPort('');
+      setLocalPort('');
+      setError('');
+      
+      // Auto-select first container and port if available
+      if (pod.containers && pod.containers.length > 0) {
+        const firstContainer = pod.containers[0];
+        setSelectedContainer(firstContainer.name);
+        
+        if (firstContainer.ports && firstContainer.ports.length > 0) {
+          const firstPort = firstContainer.ports[0].containerPort;
+          setSelectedPort(firstPort.toString());
+          setLocalPort(firstPort.toString());
+        }
       }
     }
   }, [open, pod]);
 
-  // Get all unique ports from all containers
-  const getAllPorts = () => {
-    if (!pod) return [];
+  const handleContainerChange = (containerName) => {
+    setSelectedContainer(containerName);
     
-    const ports = [];
-    pod.containers.forEach(container => {
-      if (container.ports) {
-        container.ports.forEach(port => {
-          ports.push({
-            containerPort: port.containerPort,
-            protocol: port.protocol || 'TCP',
-            name: port.name || `${container.name}-${port.containerPort}`,
-            containerName: container.name
-          });
-        });
-      }
-    });
-    return ports;
-  };
-
-  const ports = getAllPorts();
-
-  const handlePortSelect = (port) => {
-    setSelectedPort(port);
-    setLocalPort(port.containerPort.toString());
-    setUseCustomPort(false);
-    setCustomPort('');
-  };
-
-  const handleCustomPortToggle = () => {
-    setUseCustomPort(!useCustomPort);
-    if (!useCustomPort) {
-      setSelectedPort(null);
+    // Auto-select first port of the selected container
+    const container = pod.containers.find(c => c.name === containerName);
+    if (container && container.ports && container.ports.length > 0) {
+      const firstPort = container.ports[0].containerPort;
+      setSelectedPort(firstPort.toString());
+      setLocalPort(firstPort.toString());
+    } else {
+      setSelectedPort('');
       setLocalPort('');
     }
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    
-    const containerPort = useCustomPort ? customPort : selectedPort?.containerPort;
-    const targetLocalPort = localPort;
-
-    if (!containerPort || !targetLocalPort) {
-      alert('Please select a port and specify a local port');
-      return;
-    }
-
-    if (isNaN(containerPort) || isNaN(targetLocalPort)) {
-      alert('Ports must be valid numbers');
-      return;
-    }
-
-    if (containerPort < 1 || containerPort > 65535 || targetLocalPort < 1 || targetLocalPort > 65535) {
-      alert('Ports must be between 1 and 65535');
-      return;
-    }
-
-    onPortForward(pod.namespace, pod.name, containerPort, targetLocalPort);
+  const handlePortChange = (port) => {
+    setSelectedPort(port);
+    setLocalPort(port);
   };
 
-  const handleClose = () => {
-    setSelectedPort(null);
-    setLocalPort('');
-    setCustomPort('');
-    setUseCustomPort(false);
-    onClose();
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!selectedContainer || !selectedPort || !localPort) {
+      setError('Please fill in all fields');
+      return;
+    }
+
+    setIsCreating(true);
+    setError('');
+
+    try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/port-forward`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          namespace: pod.namespace,
+          podName: pod.name,
+          containerName: selectedContainer,
+          containerPort: parseInt(selectedPort),
+          localPort: parseInt(localPort),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        onSuccess?.(data);
+      } else {
+        setError(data.error || 'Failed to create port forward');
+      }
+    } catch (error) {
+      console.error('Error creating port forward:', error);
+      setError('Failed to create port forward: ' + error.message);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const getAvailablePorts = () => {
+    if (!selectedContainer) return [];
+    
+    const container = pod?.containers?.find(c => c.name === selectedContainer);
+    return container?.ports || [];
   };
 
   if (!pod) return null;
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-2xl">
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Network className="h-5 w-5" />
             Port Forward: {pod.name}
           </DialogTitle>
           <DialogDescription>
-            Forward a port from the pod to your local machine
+            Create a port forward to access the pod from your local machine
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Pod Info */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Container className="h-4 w-4" />
-                Pod Information
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="font-medium">Name:</span> {pod.name}
-                </div>
-                <div>
-                  <span className="font-medium">Namespace:</span> 
-                  <Badge variant="outline" className="ml-2">{pod.namespace}</Badge>
-                </div>
-                <div>
-                  <span className="font-medium">Status:</span> 
-                  <Badge variant="secondary" className="ml-2">{pod.status}</Badge>
-                </div>
-                <div>
-                  <span className="font-medium">Ready:</span> 
-                  <span className={pod.ready ? 'text-green-600' : 'text-red-600'}>
-                    {pod.ready ? '✅ Yes' : '❌ No'}
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        {error && (
+          <Alert className="border-red-200 bg-red-50">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="text-red-700">{error}</AlertDescription>
+          </Alert>
+        )}
 
-          {/* Port Selection */}
-          {ports.length > 0 && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-3 block">
-                  Select Container Port:
-                </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {ports.map((port, index) => (
-                    <Card
-                      key={index}
-                      className={`cursor-pointer transition-colors ${
-                        selectedPort === port 
-                          ? 'border-primary bg-primary/5' 
-                          : 'hover:border-gray-400'
-                      }`}
-                      onClick={() => handlePortSelect(port)}
-                    >
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Zap className="h-4 w-4 text-gray-500" />
-                            <span className="font-medium text-lg">{port.containerPort}</span>
-                          </div>
-                          <Badge variant="outline">{port.protocol}</Badge>
-                        </div>
-                        <div className="mt-2 text-sm text-gray-600">
-                          <p>Container: {port.containerName}</p>
-                          {port.name && <p>Name: {port.name}</p>}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Custom Port Option */}
-          <div className="space-y-4">
-            <div className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                id="custom-port"
-                checked={useCustomPort}
-                onChange={handleCustomPortToggle}
-                className="rounded border-gray-300"
-              />
-              <label htmlFor="custom-port" className="text-sm font-medium">
-                Use custom container port
-              </label>
-            </div>
-
-            {useCustomPort && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Custom Container Port:</label>
-                <Input
-                  type="number"
-                  value={customPort}
-                  onChange={(e) => setCustomPort(e.target.value)}
-                  placeholder="Enter container port (1-65535)"
-                  min="1"
-                  max="65535"
-                  required
-                />
-              </div>
-            )}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="container">Container</Label>
+            <Select value={selectedContainer} onValueChange={handleContainerChange}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select container" />
+              </SelectTrigger>
+              <SelectContent>
+                {pod.containers?.map((container) => (
+                  <SelectItem key={container.name} value={container.name}>
+                    {container.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          {/* Local Port */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Local Port:</label>
+            <Label htmlFor="port">Container Port</Label>
+            <Select value={selectedPort} onValueChange={handlePortChange}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select port" />
+              </SelectTrigger>
+              <SelectContent>
+                {getAvailablePorts().map((port) => (
+                  <SelectItem key={port.containerPort} value={port.containerPort.toString()}>
+                    {port.containerPort} ({port.protocol || 'TCP'})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="localPort">Local Port</Label>
             <Input
+              id="localPort"
               type="number"
               value={localPort}
               onChange={(e) => setLocalPort(e.target.value)}
-              placeholder="Enter local port (1-65535)"
+              placeholder="Enter local port (e.g., 8080)"
               min="1"
               max="65535"
-              required
             />
-            <p className="text-xs text-gray-500">
-              Port on localhost where the traffic will be forwarded
-            </p>
           </div>
 
-          {/* Command Preview */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Command Preview</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="bg-gray-100 p-3 rounded-md font-mono text-sm">
-                kubectl port-forward -n {pod.namespace} pod/{pod.name} {localPort}:{useCustomPort ? customPort : selectedPort?.containerPort || 'PORT'}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Action Buttons */}
-          <div className="flex justify-end space-x-2">
-            <Button type="button" variant="outline" onClick={handleClose}>
+          <div className="flex items-center justify-end space-x-2 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
             <Button 
               type="submit" 
-              disabled={!localPort || (!selectedPort && !useCustomPort) || (useCustomPort && !customPort)}
+              disabled={isCreating || !selectedContainer || !selectedPort || !localPort}
             >
-              <Network className="h-4 w-4 mr-2" />
-              Start Port Forward
+              {isCreating ? 'Creating...' : 'Create Port Forward'}
             </Button>
           </div>
         </form>
+
+        <div className="text-sm text-gray-500 mt-4">
+          <p>
+            <strong>Note:</strong> The port forward will be accessible at{' '}
+            <code className="bg-gray-100 px-1 py-0.5 rounded">
+              localhost:{localPort}
+            </code>
+          </p>
+        </div>
       </DialogContent>
     </Dialog>
   );

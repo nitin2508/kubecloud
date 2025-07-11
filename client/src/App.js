@@ -1,291 +1,676 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import './App.css';
-
-// Components
+import React, { useState, useEffect, useRef } from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
+import { Badge } from './components/ui/badge';
+import { Alert, AlertDescription } from './components/ui/alert';
+import { Button } from './components/ui/button';
+import { Toaster } from './components/ui/toaster';
+import { useToast } from './hooks/use-toast';
 import Sidebar from './components/Sidebar';
 import PodList from './components/PodList';
 import PortForwardDialog from './components/PortForwardDialog';
-import ActivePortForwards from './components/ActivePortForwards';
 import LogViewer from './components/LogViewer';
-import DeploymentUpdateDialog from './components/DeploymentUpdateDialog';
 import AggregateLogViewer from './components/AggregateLogViewer';
-
-// UI Components
-import { Card, CardContent } from './components/ui/card';
-import { Button } from './components/ui/button';
-import { Alert, AlertDescription } from './components/ui/alert';
-import { Badge } from './components/ui/badge';
-import { AlertCircle, CheckCircle, FileText } from 'lucide-react';
+import DeploymentUpdateDialog from './components/DeploymentUpdateDialog';
+import { 
+  Activity, 
+  AlertCircle, 
+  CheckCircle, 
+  Container, 
+  Network,
+  Server,
+  Play,
+  Square,
+  Trash2,
+  RefreshCw
+} from 'lucide-react';
+import './App.css';
 
 function App() {
-  const [kubeconfigUploaded, setKubeconfigUploaded] = useState(false);
-  const [namespaces, setNamespaces] = useState([]);
   const [pods, setPods] = useState([]);
+  const [namespaces, setNamespaces] = useState([]);
+  const [kubeconfigs, setKubeconfigs] = useState([]);
+  const [activeKubeconfig, setActiveKubeconfig] = useState(null);
   const [selectedNamespace, setSelectedNamespace] = useState('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [showPortForward, setShowPortForward] = useState(false);
-  const [showLogViewer, setShowLogViewer] = useState(false);
-  const [showDeploymentUpdate, setShowDeploymentUpdate] = useState(false);
-  const [showAggregateLogViewer, setShowAggregateLogViewer] = useState(false);
-  const [selectedPod, setSelectedPod] = useState(null);
-  const [selectedContainerForAggregateLog, setSelectedContainerForAggregateLog] = useState('');
-  const [activePortForwards, setActivePortForwards] = useState([]);
-  const [healthInfo, setHealthInfo] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState('disconnected');
+  
+  // Persistent state management
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    const saved = localStorage.getItem('kubecloud-sidebar-collapsed');
+    return saved ? JSON.parse(saved) : false;
+  });
+  
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = localStorage.getItem('kubecloud-active-tab');
+    return saved || 'pods';
+  });
+  
+  const [portForwards, setPortForwards] = useState([]);
+  const [isRefreshingPortForwards, setIsRefreshingPortForwards] = useState(false);
+  const { toast } = useToast();
+  const pollIntervalRef = useRef(null);
 
-  const checkHealth = async () => {
+  // Dialog states
+  const [portForwardDialog, setPortForwardDialog] = useState({ open: false, pod: null });
+  const [logViewer, setLogViewer] = useState({ open: false, pod: null });
+  const [aggregateLogViewer, setAggregateLogViewer] = useState({ open: false, containerName: '' });
+  const [deploymentUpdateDialog, setDeploymentUpdateDialog] = useState({ open: false, pod: null });
+
+  // Save persistent state changes
+  useEffect(() => {
+    localStorage.setItem('kubecloud-sidebar-collapsed', JSON.stringify(isCollapsed));
+  }, [isCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem('kubecloud-active-tab', activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    fetchKubeconfigs();
+    fetchPortForwards();
+  }, []);
+
+  useEffect(() => {
+    if (activeKubeconfig) {
+      fetchNamespaces();
+      fetchPods();
+    }
+  }, [activeKubeconfig, selectedNamespace]);
+
+  // Port forward polling effect
+  useEffect(() => {
+    // Clear existing interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+
+    // Only poll if we have port forwards and we're on the port forwards tab
+    if (portForwards.length > 0 && activeTab === 'port-forwards') {
+      // Check if any port forward is in 'starting' state
+      const hasStartingPortForward = portForwards.some(pf => pf.status === 'starting');
+      
+      // Set interval based on status: 5 seconds if any are starting, 10 seconds otherwise
+      const interval = hasStartingPortForward ? 5000 : 10000;
+      
+      pollIntervalRef.current = setInterval(() => {
+        fetchPortForwards(true); // Silent fetch (don't show loading/errors)
+      }, interval);
+    }
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [portForwards, activeTab]);
+
+  // Cleanup interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Helper function to show error toasts
+  const showErrorToast = (title, description) => {
+    toast({
+      variant: "destructive",
+      title: title,
+      description: description,
+    });
+  };
+
+  // Helper function to show success toasts
+  const showSuccessToast = (title, description) => {
+    toast({
+      title: title,
+      description: description,
+    });
+  };
+
+  const fetchKubeconfigs = async () => {
     try {
-      const response = await axios.get('/api/health');
-      setHealthInfo(response.data);
-      setKubeconfigUploaded(response.data.kubeconfigLoaded);
-      if (response.data.kubeconfigLoaded) {
-        fetchNamespaces();
-        fetchAllPods();
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/kubeconfig/list`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        setKubeconfigs(data.kubeconfigs);
+        setActiveKubeconfig(data.active);
+        setConnectionStatus(data.active ? 'connected' : 'disconnected');
+      } else {
+        setError(data.error || 'Failed to fetch kubeconfigs');
+        showErrorToast('Connection Error', data.error || 'Failed to fetch kubeconfigs');
       }
     } catch (error) {
-      console.error('Health check failed:', error);
+      console.error('Error fetching kubeconfigs:', error);
+      setError('Failed to connect to backend');
+      setConnectionStatus('error');
+      showErrorToast('Backend Error', 'Failed to connect to backend server');
     }
   };
 
-  useEffect(() => {
-    checkHealth();
-  }, []);
+  const fetchPortForwards = async (silent = false) => {
+    try {
+      if (!silent) {
+        setIsRefreshingPortForwards(true);
+      }
+      
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/port-forwards`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        setPortForwards(data.portForwards || []);
+      } else {
+        if (!silent) {
+          showErrorToast('Port Forward Error', data.error || 'Failed to fetch port forwards');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching port forwards:', error);
+      if (!silent) {
+        showErrorToast('Network Error', 'Failed to fetch port forwards');
+      }
+    } finally {
+      if (!silent) {
+        setIsRefreshingPortForwards(false);
+      }
+    }
+  };
 
-  const handleKubeconfigChange = () => {
-    checkHealth();
+  const handleRefreshPortForwards = () => {
+    fetchPortForwards(false);
   };
 
   const fetchNamespaces = async () => {
-    try {
-      const response = await axios.get('/api/namespaces');
-      setNamespaces(response.data);
-    } catch (error) {
-      setError('Failed to fetch namespaces');
-    }
-  };
-
-  const fetchAllPods = async () => {
-    try {
-      const response = await axios.get('/api/pods');
-      setPods(response.data);
-      setSelectedNamespace('all');
-    } catch (error) {
-      setError('Failed to fetch pods');
-    }
-  };
-
-  const fetchNamespacePods = async (namespace) => {
-    if (namespace === 'all') {
-      fetchAllPods();
-      return;
-    }
-
+    if (!activeKubeconfig) return;
+    
     try {
       setLoading(true);
-      const response = await axios.get(`/api/namespaces/${namespace}/pods`);
-      setPods(response.data);
-      setSelectedNamespace(namespace);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/namespaces`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        setNamespaces(data.namespaces || []);
+        setError('');
+      } else {
+        setError(data.error || 'Failed to fetch namespaces');
+        showErrorToast('Kubernetes Error', data.error || 'Failed to fetch namespaces');
+        setNamespaces([]);
+      }
     } catch (error) {
-      setError('Failed to fetch pods for namespace');
+      console.error('Error fetching namespaces:', error);
+      setError('Failed to fetch namespaces');
+      showErrorToast('Network Error', 'Failed to fetch namespaces');
+      setNamespaces([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePortForward = (pod) => {
-    setSelectedPod(pod);
-    setShowPortForward(true);
-  };
-
-  const handleViewLogs = (pod) => {
-    setSelectedPod(pod);
-    setShowLogViewer(true);
-  };
-
-  const handleViewAggregateLogs = (containerName) => {
-    setSelectedContainerForAggregateLog(containerName);
-    setShowAggregateLogViewer(true);
-  };
-
-  const handleUpdateDeployment = (pod) => {
-    setSelectedPod(pod);
-    setShowDeploymentUpdate(true);
-  };
-
-  const executePortForward = async (namespace, podName, containerPort, localPort) => {
+  const fetchPods = async () => {
+    if (!activeKubeconfig) return;
+    
     try {
-      const response = await axios.post('/api/port-forward', {
-        namespace,
-        podName,
-        containerPort,
-        localPort,
-      });
-
-      const newPortForward = {
-        id: `${namespace}-${podName}-${containerPort}-${localPort}`,
-        namespace,
-        podName,
-        containerPort,
-        localPort,
-        startTime: new Date().toLocaleString(),
-        pid: response.data.pid,
-        status: 'active'
-      };
-
-      setActivePortForwards(prev => [...prev, newPortForward]);
-      setSuccess(`Port forwarding started: localhost:${localPort} -> ${podName}:${containerPort}`);
-      setShowPortForward(false);
+      setLoading(true);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const url = selectedNamespace === 'all' 
+        ? `${backendUrl}/api/pods`
+        : `${backendUrl}/api/pods?namespace=${selectedNamespace}`;
+      
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      if (response.ok) {
+        setPods(data.pods || []);
+        setError('');
+        setConnectionStatus('connected');
+      } else {
+        setError(data.error || 'Failed to fetch pods');
+        showErrorToast('Kubernetes Error', data.error || 'Failed to fetch pods');
+        setPods([]);
+        setConnectionStatus('error');
+      }
     } catch (error) {
-      setError(error.response?.data?.error || 'Failed to start port forwarding');
+      console.error('Error fetching pods:', error);
+      setError('Failed to fetch pods');
+      showErrorToast('Network Error', 'Failed to fetch pods');
+      setPods([]);
+      setConnectionStatus('error');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const removePortForward = (id) => {
-    setActivePortForwards(prev => prev.filter(pf => pf.id !== id));
+  const handleKubeconfigUpload = (result) => {
+    setKubeconfigs(result.kubeconfigs);
+    setActiveKubeconfig(result.active);
+    setConnectionStatus(result.active ? 'connected' : 'disconnected');
+    if (result.active) {
+      showSuccessToast('Kubeconfig Uploaded', 'Configuration uploaded and activated successfully');
+      fetchNamespaces();
+      fetchPods();
+    }
   };
 
-  const clearMessages = () => {
-    setError('');
-    setSuccess('');
+  const handleKubeconfigActivate = (result) => {
+    setKubeconfigs(result.kubeconfigs);
+    setActiveKubeconfig(result.active);
+    setConnectionStatus('connected');
+    showSuccessToast('Kubeconfig Activated', 'Configuration activated successfully');
+    fetchNamespaces();
+    fetchPods();
+  };
+
+  const handleKubeconfigDelete = (result) => {
+    setKubeconfigs(result.kubeconfigs);
+    setActiveKubeconfig(result.active);
+    setConnectionStatus(result.active ? 'connected' : 'disconnected');
+    showSuccessToast('Kubeconfig Deleted', 'Configuration deleted successfully');
+    if (result.active) {
+      fetchNamespaces();
+      fetchPods();
+    } else {
+      setNamespaces([]);
+      setPods([]);
+    }
+  };
+
+  const handlePortForward = (pod) => {
+    setPortForwardDialog({ open: true, pod });
+  };
+
+  const handlePortForwardSuccess = (data) => {
+    setPortForwardDialog({ open: false, pod: null });
+    showSuccessToast('Port Forward Created', `Port forwarding active on localhost:${data.portForward.localPort}`);
+    fetchPortForwards();
+  };
+
+  const handleViewLogs = (pod) => {
+    setLogViewer({ open: true, pod });
+  };
+
+  const handleViewAggregateLogs = (containerName) => {
+    setAggregateLogViewer({ open: true, containerName });
+  };
+
+  const handleUpdateDeployment = (pod) => {
+    setDeploymentUpdateDialog({ open: true, pod });
+  };
+
+  const handleNamespaceChange = (namespace) => {
+    setSelectedNamespace(namespace);
+  };
+
+  const handleToggleCollapse = () => {
+    setIsCollapsed(!isCollapsed);
+  };
+
+  const handleStartPortForward = async (portForwardId) => {
+    try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/port-forwards/${portForwardId}/start`, {
+        method: 'POST'
+      });
+      
+      if (response.ok) {
+        showSuccessToast('Port Forward Started', 'Port forward started successfully');
+        fetchPortForwards();
+      } else {
+        const data = await response.json();
+        showErrorToast('Start Failed', data.error || 'Failed to start port forward');
+      }
+    } catch (error) {
+      console.error('Error starting port forward:', error);
+      showErrorToast('Network Error', 'Failed to start port forward');
+    }
+  };
+
+  const handleStopPortForward = async (portForwardId) => {
+    try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/port-forwards/${portForwardId}/stop`, {
+        method: 'POST'
+      });
+      
+      if (response.ok) {
+        showSuccessToast('Port Forward Stopped', 'Port forward stopped successfully');
+        fetchPortForwards();
+      } else {
+        const data = await response.json();
+        showErrorToast('Stop Failed', data.error || 'Failed to stop port forward');
+      }
+    } catch (error) {
+      console.error('Error stopping port forward:', error);
+      showErrorToast('Network Error', 'Failed to stop port forward');
+    }
+  };
+
+  const handleDeletePortForward = async (portForwardId) => {
+    try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+      const response = await fetch(`${backendUrl}/api/port-forwards/${portForwardId}`, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        showSuccessToast('Port Forward Deleted', 'Port forward deleted successfully');
+        fetchPortForwards();
+      } else {
+        const data = await response.json();
+        showErrorToast('Delete Failed', data.error || 'Failed to delete port forward');
+      }
+    } catch (error) {
+      console.error('Error deleting port forward:', error);
+      showErrorToast('Network Error', 'Failed to delete port forward');
+    }
+  };
+
+  const getConnectionStatusColor = () => {
+    switch (connectionStatus) {
+      case 'connected':
+        return 'text-green-600';
+      case 'error':
+        return 'text-red-600';
+      default:
+        return 'text-gray-600';
+    }
+  };
+
+  const getConnectionStatusIcon = () => {
+    switch (connectionStatus) {
+      case 'connected':
+        return <CheckCircle className="h-4 w-4" />;
+      case 'error':
+        return <AlertCircle className="h-4 w-4" />;
+      default:
+        return <Activity className="h-4 w-4" />;
+    }
+  };
+
+  const getPortForwardStatusVariant = (status) => {
+    switch (status) {
+      case 'active':
+        return 'default';
+      case 'starting':
+        return 'secondary';
+      case 'stopped':
+        return 'outline';
+      case 'error':
+        return 'destructive';
+      default:
+        return 'secondary';
+    }
+  };
+
+  const getPortForwardStatusColor = (status) => {
+    switch (status) {
+      case 'active':
+        return 'bg-green-100 text-green-800';
+      case 'starting':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'stopped':
+        return 'bg-gray-100 text-gray-800';
+      case 'error':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
   };
 
   return (
-    <div className="h-screen bg-gray-50 flex">
+    <div className="flex h-screen bg-gray-50">
       {/* Sidebar */}
-      <Sidebar 
-        onKubeconfigChange={handleKubeconfigChange}
-        activeKubeconfig={healthInfo?.activeKubeconfig}
+      <Sidebar
+        kubeconfigs={kubeconfigs}
+        activeKubeconfig={activeKubeconfig}
+        onUpload={handleKubeconfigUpload}
+        onActivate={handleKubeconfigActivate}
+        onDelete={handleKubeconfigDelete}
+        isCollapsed={isCollapsed}
+        onToggleCollapse={handleToggleCollapse}
       />
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="bg-white border-b border-gray-200 p-4">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Kubernetes Dashboard</h1>
-              <p className="text-sm text-gray-600">Manage your cluster resources</p>
-            </div>
-            {healthInfo && (
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  {healthInfo.kubeconfigLoaded ? (
-                    <CheckCircle className="h-5 w-5 text-green-500" />
-                  ) : (
-                    <AlertCircle className="h-5 w-5 text-yellow-500" />
-                  )}
-                  <span className="text-sm font-medium">
-                    {healthInfo.kubeconfigLoaded 
-                      ? `Active: ${healthInfo.activeKubeconfig}` 
-                      : 'No kubeconfig loaded'
-                    }
-                  </span>
-                </div>
-                <Badge variant="secondary">
-                  {healthInfo.totalKubeconfigs} config{healthInfo.totalKubeconfigs !== 1 ? 's' : ''}
-                </Badge>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Server className="h-5 w-5 text-gray-600" />
+                <span className="font-medium">
+                  {activeKubeconfig ? activeKubeconfig.name : 'No Configuration'}
+                </span>
               </div>
-            )}
+              <div className={`flex items-center gap-2 ${getConnectionStatusColor()}`}>
+                {getConnectionStatusIcon()}
+                <span className="text-sm capitalize">{connectionStatus}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">
+                {namespaces.length} namespace{namespaces.length !== 1 ? 's' : ''}
+              </Badge>
+              <Badge variant="outline">
+                {pods.length} pod{pods.length !== 1 ? 's' : ''}
+              </Badge>
+            </div>
           </div>
-        </header>
+        </div>
 
         {/* Content Area */}
-        <main className="flex-1 overflow-auto p-6">
-          {error && (
-            <Alert className="mb-6 border-red-200 bg-red-50">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription className="flex items-center justify-between">
-                <span>{error}</span>
-                <Button variant="ghost" size="sm" onClick={clearMessages}>
-                  ×
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {success && (
-            <Alert className="mb-6 border-green-200 bg-green-50">
-              <CheckCircle className="h-4 w-4" />
-              <AlertDescription className="flex items-center justify-between">
-                <span>{success}</span>
-                <Button variant="ghost" size="sm" onClick={clearMessages}>
-                  ×
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {!kubeconfigUploaded ? (
-            <Card className="max-w-2xl mx-auto">
-              <CardContent className="text-center py-12">
-                <FileText className="mx-auto h-16 w-16 text-gray-400 mb-4" />
-                <h3 className="text-xl font-semibold mb-2">No Kubeconfig Loaded</h3>
-                <p className="text-gray-600 mb-4">
-                  Upload a kubeconfig file from the sidebar to get started with managing your Kubernetes cluster.
-                </p>
-                <div className="text-sm text-gray-500">
-                  <p>• Drag and drop your kubeconfig file</p>
-                  <p>• Or click "Add Config" in the sidebar</p>
+        <div className="flex-1 overflow-auto p-6">
+          {!activeKubeconfig ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Welcome to KubeCloud</CardTitle>
+                <CardDescription>
+                  Upload a kubeconfig file to get started with managing your Kubernetes cluster
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center py-8">
+                  <Container className="mx-auto h-16 w-16 text-gray-400 mb-4" />
+                  <p className="text-gray-500">
+                    Use the sidebar to upload and manage your kubeconfig files
+                  </p>
                 </div>
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-6">
-              {/* Pod List */}
-              <PodList 
-                pods={pods} 
-                namespaces={namespaces}
-                loading={loading}
-                onPortForward={handlePortForward}
-                onViewLogs={handleViewLogs}
-                onViewAggregateLogs={handleViewAggregateLogs}
-                onUpdateDeployment={handleUpdateDeployment}
-                onNamespaceChange={fetchNamespacePods}
-              />
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+              <TabsList>
+                <TabsTrigger value="pods" className="flex items-center gap-2">
+                  <Container className="h-4 w-4" />
+                  Pods
+                </TabsTrigger>
+                <TabsTrigger value="port-forwards" className="flex items-center gap-2">
+                  <Network className="h-4 w-4" />
+                  Port Forwards ({portForwards.length})
+                </TabsTrigger>
+              </TabsList>
 
-              {/* Active Port Forwards */}
-              {activePortForwards.length > 0 && (
-                <ActivePortForwards 
-                  portForwards={activePortForwards}
-                  onRemove={removePortForward}
+              <TabsContent value="pods" className="space-y-4">
+                {error && (
+                  <Alert className="border-red-200 bg-red-50">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="text-red-700">{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                <PodList
+                  pods={pods}
+                  namespaces={namespaces}
+                  loading={loading}
+                  onPortForward={handlePortForward}
+                  onViewLogs={handleViewLogs}
+                  onViewAggregateLogs={handleViewAggregateLogs}
+                  onUpdateDeployment={handleUpdateDeployment}
+                  onNamespaceChange={handleNamespaceChange}
                 />
-              )}
-            </div>
+              </TabsContent>
+
+              <TabsContent value="port-forwards" className="space-y-4">
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <Network className="h-5 w-5" />
+                          Active Port Forwards
+                        </CardTitle>
+                        <CardDescription>
+                          Manage your active port forward connections
+                          {portForwards.some(pf => pf.status === 'starting') && (
+                            <span className="block text-yellow-600 text-sm mt-1">
+                              • Auto-refreshing every 5 seconds (starting port forwards detected)
+                            </span>
+                          )}
+                          {portForwards.length > 0 && !portForwards.some(pf => pf.status === 'starting') && (
+                            <span className="block text-gray-500 text-sm mt-1">
+                              • Auto-refreshing every 10 seconds
+                            </span>
+                          )}
+                        </CardDescription>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRefreshPortForwards}
+                        disabled={isRefreshingPortForwards}
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshingPortForwards ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {portForwards.length === 0 ? (
+                      <div className="text-center py-8">
+                        <Network className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                        <h3 className="text-lg font-semibold mb-2">No active port forwards</h3>
+                        <p className="text-gray-500">
+                          Create port forwards from the Pods tab to see them here
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {portForwards.map((pf) => (
+                          <Card key={pf.id} className="p-4">
+                            <div className="flex items-center justify-between">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium">{pf.podName}</span>
+                                  <Badge variant="outline">{pf.namespace}</Badge>
+                                  <Badge 
+                                    variant={getPortForwardStatusVariant(pf.status)}
+                                    className={getPortForwardStatusColor(pf.status)}
+                                  >
+                                    {pf.status === 'starting' && (
+                                      <Activity className="h-3 w-3 mr-1 animate-spin" />
+                                    )}
+                                    {pf.status}
+                                  </Badge>
+                                </div>
+                                <div className="text-sm text-gray-500">
+                                  localhost:{pf.localPort} → {pf.containerName}:{pf.containerPort}
+                                </div>
+                                <div className="text-xs text-gray-400">
+                                  Created: {new Date(pf.createdAt).toLocaleString()}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {pf.status === 'active' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleStopPortForward(pf.id)}
+                                  >
+                                    <Square className="h-4 w-4 mr-1" />
+                                    Stop
+                                  </Button>
+                                ) : pf.status === 'starting' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled
+                                  >
+                                    <Activity className="h-4 w-4 mr-1 animate-spin" />
+                                    Starting...
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleStartPortForward(pf.id)}
+                                  >
+                                    <Play className="h-4 w-4 mr-1" />
+                                    Start
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleDeletePortForward(pf.id)}
+                                  className="text-red-500 hover:text-red-700"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </Card>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
           )}
-        </main>
+        </div>
       </div>
 
       {/* Dialogs */}
       <PortForwardDialog
-        pod={selectedPod}
-        open={showPortForward}
-        onClose={() => setShowPortForward(false)}
-        onPortForward={executePortForward}
+        open={portForwardDialog.open}
+        pod={portForwardDialog.pod}
+        onClose={() => setPortForwardDialog({ open: false, pod: null })}
+        onSuccess={handlePortForwardSuccess}
       />
 
       <LogViewer
-        pod={selectedPod}
-        open={showLogViewer}
-        onClose={() => setShowLogViewer(false)}
-      />
-
-      <DeploymentUpdateDialog
-        pod={selectedPod}
-        open={showDeploymentUpdate}
-        onClose={() => setShowDeploymentUpdate(false)}
-        onSuccess={(message) => {
-          setSuccess(message);
-          setShowDeploymentUpdate(false);
-        }}
+        open={logViewer.open}
+        pod={logViewer.pod}
+        onClose={() => setLogViewer({ open: false, pod: null })}
       />
 
       <AggregateLogViewer
-        containerName={selectedContainerForAggregateLog}
-        open={showAggregateLogViewer}
-        onClose={() => setShowAggregateLogViewer(false)}
+        open={aggregateLogViewer.open}
+        containerName={aggregateLogViewer.containerName}
+        onClose={() => setAggregateLogViewer({ open: false, containerName: '' })}
       />
+
+      <DeploymentUpdateDialog
+        open={deploymentUpdateDialog.open}
+        pod={deploymentUpdateDialog.pod}
+        onClose={() => setDeploymentUpdateDialog({ open: false, pod: null })}
+        onSuccess={() => {
+          setDeploymentUpdateDialog({ open: false, pod: null });
+          showSuccessToast('Deployment Updated', 'Deployment image updated successfully');
+          fetchPods();
+        }}
+      />
+
+      {/* Toast notifications */}
+      <Toaster />
     </div>
   );
 }
