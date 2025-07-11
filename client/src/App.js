@@ -3,8 +3,7 @@ import axios from 'axios';
 import './App.css';
 
 // Components
-import KubeconfigManager from './components/KubeconfigManager';
-import NamespaceDropdown from './components/NamespaceDropdown';
+import Sidebar from './components/Sidebar';
 import PodList from './components/PodList';
 import PortForwardDialog from './components/PortForwardDialog';
 import ActivePortForwards from './components/ActivePortForwards';
@@ -13,11 +12,11 @@ import DeploymentUpdateDialog from './components/DeploymentUpdateDialog';
 import AggregateLogViewer from './components/AggregateLogViewer';
 
 // UI Components
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
+import { Card, CardContent } from './components/ui/card';
 import { Button } from './components/ui/button';
 import { Alert, AlertDescription } from './components/ui/alert';
 import { Badge } from './components/ui/badge';
-import { Cloud, AlertCircle, CheckCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, FileText } from 'lucide-react';
 
 function App() {
   const [kubeconfigUploaded, setKubeconfigUploaded] = useState(false);
@@ -152,155 +151,141 @@ function App() {
     setSuccess('');
   };
 
-  const getDisplayTitle = () => {
-    if (selectedNamespace === 'all') {
-      return 'All Pods';
-    }
-    return `Pods in ${selectedNamespace}`;
-  };
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="header">
-        <div className="container">
-          <div className="flex items-center justify-center gap-3">
-            <Cloud className="h-8 w-8" />
-            <h1>KubeCloud</h1>
-          </div>
-          <p>Kubernetes Management Dashboard</p>
-          {healthInfo && (
-            <div className="mt-4 flex items-center justify-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                {healthInfo.kubeconfigLoaded ? (
-                  <CheckCircle className="h-4 w-4 text-green-200" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 text-yellow-200" />
-                )}
-                <span>
-                  {healthInfo.kubeconfigLoaded 
-                    ? `Active: ${healthInfo.activeKubeconfig}` 
-                    : 'No kubeconfig loaded'
-                  }
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="bg-white/20 text-white">
+    <div className="h-screen bg-gray-50 flex">
+      {/* Sidebar */}
+      <Sidebar 
+        onKubeconfigChange={handleKubeconfigChange}
+        activeKubeconfig={healthInfo?.activeKubeconfig}
+      />
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="bg-white border-b border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Kubernetes Dashboard</h1>
+              <p className="text-sm text-gray-600">Manage your cluster resources</p>
+            </div>
+            {healthInfo && (
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  {healthInfo.kubeconfigLoaded ? (
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                  ) : (
+                    <AlertCircle className="h-5 w-5 text-yellow-500" />
+                  )}
+                  <span className="text-sm font-medium">
+                    {healthInfo.kubeconfigLoaded 
+                      ? `Active: ${healthInfo.activeKubeconfig}` 
+                      : 'No kubeconfig loaded'
+                    }
+                  </span>
+                </div>
+                <Badge variant="secondary">
                   {healthInfo.totalKubeconfigs} config{healthInfo.totalKubeconfigs !== 1 ? 's' : ''}
                 </Badge>
               </div>
-            </div>
-          )}
-        </div>
-      </header>
-
-      <main className="container py-6">
-        {error && (
-          <Alert className="mb-6 border-red-200 bg-red-50">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription className="flex items-center justify-between">
-              <span>{error}</span>
-              <Button variant="ghost" size="sm" onClick={clearMessages}>
-                ×
-              </Button>
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {success && (
-          <Alert className="mb-6 border-green-200 bg-green-50">
-            <CheckCircle className="h-4 w-4" />
-            <AlertDescription className="flex items-center justify-between">
-              <span>{success}</span>
-              <Button variant="ghost" size="sm" onClick={clearMessages}>
-                ×
-              </Button>
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {!kubeconfigUploaded ? (
-          <div className="max-w-4xl mx-auto">
-            <KubeconfigManager onKubeconfigChange={handleKubeconfigChange} />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Top Section - Kubeconfig Management and Namespace Selection */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <KubeconfigManager onKubeconfigChange={handleKubeconfigChange} />
-              </div>
-              <div>
-                <NamespaceDropdown 
-                  namespaces={namespaces} 
-                  selectedNamespace={selectedNamespace}
-                  onNamespaceChange={fetchNamespacePods}
-                />
-              </div>
-            </div>
-
-            {/* Main Content - Pod List */}
-            <Card>
-              <CardHeader>
-                <CardTitle>{getDisplayTitle()}</CardTitle>
-                <CardDescription>
-                  {selectedNamespace === 'all' 
-                    ? 'All pods across all namespaces' 
-                    : `Pods in the ${selectedNamespace} namespace`
-                  }
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <PodList 
-                  pods={pods} 
-                  loading={loading}
-                  onPortForward={handlePortForward}
-                  onViewLogs={handleViewLogs}
-                  onViewAggregateLogs={handleViewAggregateLogs}
-                  onUpdateDeployment={handleUpdateDeployment}
-                />
-              </CardContent>
-            </Card>
-
-            {/* Active Port Forwards */}
-            {activePortForwards.length > 0 && (
-              <ActivePortForwards 
-                portForwards={activePortForwards}
-                onRemove={removePortForward}
-              />
             )}
           </div>
-        )}
+        </header>
 
-        {/* Dialogs */}
-        <PortForwardDialog
-          pod={selectedPod}
-          open={showPortForward}
-          onClose={() => setShowPortForward(false)}
-          onPortForward={executePortForward}
-        />
+        {/* Content Area */}
+        <main className="flex-1 overflow-auto p-6">
+          {error && (
+            <Alert className="mb-6 border-red-200 bg-red-50">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>{error}</span>
+                <Button variant="ghost" size="sm" onClick={clearMessages}>
+                  ×
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
-        <LogViewer
-          pod={selectedPod}
-          open={showLogViewer}
-          onClose={() => setShowLogViewer(false)}
-        />
+          {success && (
+            <Alert className="mb-6 border-green-200 bg-green-50">
+              <CheckCircle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>{success}</span>
+                <Button variant="ghost" size="sm" onClick={clearMessages}>
+                  ×
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
-        <DeploymentUpdateDialog
-          pod={selectedPod}
-          open={showDeploymentUpdate}
-          onClose={() => setShowDeploymentUpdate(false)}
-          onSuccess={(message) => {
-            setSuccess(message);
-            setShowDeploymentUpdate(false);
-          }}
-        />
+          {!kubeconfigUploaded ? (
+            <Card className="max-w-2xl mx-auto">
+              <CardContent className="text-center py-12">
+                <FileText className="mx-auto h-16 w-16 text-gray-400 mb-4" />
+                <h3 className="text-xl font-semibold mb-2">No Kubeconfig Loaded</h3>
+                <p className="text-gray-600 mb-4">
+                  Upload a kubeconfig file from the sidebar to get started with managing your Kubernetes cluster.
+                </p>
+                <div className="text-sm text-gray-500">
+                  <p>• Drag and drop your kubeconfig file</p>
+                  <p>• Or click "Add Config" in the sidebar</p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-6">
+              {/* Pod List */}
+              <PodList 
+                pods={pods} 
+                namespaces={namespaces}
+                loading={loading}
+                onPortForward={handlePortForward}
+                onViewLogs={handleViewLogs}
+                onViewAggregateLogs={handleViewAggregateLogs}
+                onUpdateDeployment={handleUpdateDeployment}
+                onNamespaceChange={fetchNamespacePods}
+              />
 
-        <AggregateLogViewer
-          containerName={selectedContainerForAggregateLog}
-          open={showAggregateLogViewer}
-          onClose={() => setShowAggregateLogViewer(false)}
-        />
-      </main>
+              {/* Active Port Forwards */}
+              {activePortForwards.length > 0 && (
+                <ActivePortForwards 
+                  portForwards={activePortForwards}
+                  onRemove={removePortForward}
+                />
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* Dialogs */}
+      <PortForwardDialog
+        pod={selectedPod}
+        open={showPortForward}
+        onClose={() => setShowPortForward(false)}
+        onPortForward={executePortForward}
+      />
+
+      <LogViewer
+        pod={selectedPod}
+        open={showLogViewer}
+        onClose={() => setShowLogViewer(false)}
+      />
+
+      <DeploymentUpdateDialog
+        pod={selectedPod}
+        open={showDeploymentUpdate}
+        onClose={() => setShowDeploymentUpdate(false)}
+        onSuccess={(message) => {
+          setSuccess(message);
+          setShowDeploymentUpdate(false);
+        }}
+      />
+
+      <AggregateLogViewer
+        containerName={selectedContainerForAggregateLog}
+        open={showAggregateLogViewer}
+        onClose={() => setShowAggregateLogViewer(false)}
+      />
     </div>
   );
 }
