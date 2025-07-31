@@ -33,6 +33,8 @@ function App() {
   const [activeKubeconfig, setActiveKubeconfig] = useState(null);
   const [selectedNamespace, setSelectedNamespace] = useState('all');
   const [loading, setLoading] = useState(false);
+  const [loadingPods, setLoadingPods] = useState(false);
+  const [loadingNamespaces, setLoadingNamespaces] = useState(false);
   const [error, setError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   
@@ -52,6 +54,12 @@ function App() {
   const { toast } = useToast();
   const pollIntervalRef = useRef(null);
 
+  // Refs to prevent duplicate API calls
+  const fetchingKubeconfigs = useRef(false);
+  const fetchingPortForwards = useRef(false);
+  const fetchingPods = useRef(false);
+  const fetchingNamespaces = useRef(false);
+
   // Dialog states
   const [portForwardDialog, setPortForwardDialog] = useState({ open: false, pod: null });
   const [logViewer, setLogViewer] = useState({ open: false, pod: null });
@@ -67,7 +75,11 @@ function App() {
     localStorage.setItem('kubecloud-active-tab', activeTab);
   }, [activeTab]);
 
+  // Initial data fetch on component mount
+  // Note: In development mode with React.StrictMode, this will run twice
+  // The ref guards above prevent actual duplicate API calls
   useEffect(() => {
+    console.log('App mounted - fetching initial data');
     fetchKubeconfigs();
     fetchPortForwards();
   }, []);
@@ -134,7 +146,13 @@ function App() {
   };
 
   const fetchKubeconfigs = async () => {
+    if (fetchingKubeconfigs.current) {
+      return;
+    }
+    
     try {
+      fetchingKubeconfigs.current = true;
+      
       const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
       const response = await fetch(`${backendUrl}/api/kubeconfig/list`);
       const data = await response.json();
@@ -152,12 +170,21 @@ function App() {
       setError('Failed to connect to backend');
       setConnectionStatus('error');
       showErrorToast('Backend Error', 'Failed to connect to backend server');
+    } finally {
+      fetchingKubeconfigs.current = false;
     }
   };
 
   const fetchPortForwards = async (silent = false) => {
+    if (fetchingPortForwards.current && !silent) {
+      console.log('fetchPortForwards already in progress, skipping');
+      return;
+    }
+    
     try {
       if (!silent) {
+        fetchingPortForwards.current = true;
+        console.log('Starting fetchPortForwards');
         setIsRefreshingPortForwards(true);
       }
       
@@ -179,6 +206,8 @@ function App() {
       }
     } finally {
       if (!silent) {
+        fetchingPortForwards.current = false;
+        console.log('Finished fetchPortForwards');
         setIsRefreshingPortForwards(false);
       }
     }
@@ -191,7 +220,15 @@ function App() {
   const fetchNamespaces = async () => {
     if (!activeKubeconfig) return;
     
+    if (fetchingNamespaces.current) {
+      console.log('fetchNamespaces already in progress, skipping');
+      return;
+    }
+    
     try {
+      fetchingNamespaces.current = true;
+      console.log('Starting fetchNamespaces');
+      setLoadingNamespaces(true);
       setLoading(true);
       const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
       const response = await fetch(`${backendUrl}/api/namespaces`);
@@ -201,16 +238,32 @@ function App() {
         setNamespaces(data.namespaces || []);
         setError('');
       } else {
-        setError(data.error || 'Failed to fetch namespaces');
-        showErrorToast('Kubernetes Error', data.error || 'Failed to fetch namespaces');
+        const errorMsg = data.error || 'Failed to fetch namespaces';
+        setError(errorMsg);
+        
+        // Provide more specific error messages for common issues
+        if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connection refused')) {
+          showErrorToast('Kubernetes Connection Error', 'Cannot connect to Kubernetes cluster. Please check your kubeconfig and cluster status.');
+        } else {
+          showErrorToast('Kubernetes Error', errorMsg);
+        }
         setNamespaces([]);
       }
     } catch (error) {
       console.error('Error fetching namespaces:', error);
-      setError('Failed to fetch namespaces');
-      showErrorToast('Network Error', 'Failed to fetch namespaces');
+      const errorMsg = 'Failed to fetch namespaces';
+      setError(errorMsg);
+      
+      if (error.message.includes('fetch')) {
+        showErrorToast('Network Error', 'Unable to connect to the backend server');
+      } else {
+        showErrorToast('Network Error', errorMsg);
+      }
       setNamespaces([]);
     } finally {
+      fetchingNamespaces.current = false;
+      console.log('Finished fetchNamespaces');
+      setLoadingNamespaces(false);
       setLoading(false);
     }
   };
@@ -218,7 +271,15 @@ function App() {
   const fetchPods = async () => {
     if (!activeKubeconfig) return;
     
+    if (fetchingPods.current) {
+      console.log('fetchPods already in progress, skipping');
+      return;
+    }
+    
     try {
+      fetchingPods.current = true;
+      console.log('Starting fetchPods');
+      setLoadingPods(true);
       setLoading(true);
       const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
       const url = selectedNamespace === 'all' 
@@ -233,18 +294,38 @@ function App() {
         setError('');
         setConnectionStatus('connected');
       } else {
-        setError(data.error || 'Failed to fetch pods');
-        showErrorToast('Kubernetes Error', data.error || 'Failed to fetch pods');
+        const errorMsg = data.error || 'Failed to fetch pods';
+        setError(errorMsg);
+        
+        // Provide more specific error messages for common issues
+        if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connection refused')) {
+          showErrorToast('Kubernetes Connection Error', 'Cannot connect to Kubernetes cluster. Please check your kubeconfig and cluster status.');
+          setConnectionStatus('error');
+        } else if (errorMsg.includes('No kubeconfig loaded')) {
+          showErrorToast('Configuration Error', 'No kubeconfig is currently active. Please upload and activate a kubeconfig.');
+          setConnectionStatus('disconnected');
+        } else {
+          showErrorToast('Kubernetes Error', errorMsg);
+          setConnectionStatus('error');
+        }
         setPods([]);
-        setConnectionStatus('error');
       }
     } catch (error) {
       console.error('Error fetching pods:', error);
-      setError('Failed to fetch pods');
-      showErrorToast('Network Error', 'Failed to fetch pods');
+      const errorMsg = 'Failed to fetch pods';
+      setError(errorMsg);
+      
+      if (error.message.includes('fetch')) {
+        showErrorToast('Network Error', 'Unable to connect to the backend server');
+      } else {
+        showErrorToast('Network Error', errorMsg);
+      }
       setPods([]);
       setConnectionStatus('error');
     } finally {
+      fetchingPods.current = false;
+      console.log('Finished fetchPods');
+      setLoadingPods(false);
       setLoading(false);
     }
   };
@@ -456,11 +537,25 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant="outline">
-                {namespaces.length} namespace{namespaces.length !== 1 ? 's' : ''}
+              <Badge variant="outline" className={loadingNamespaces ? 'animate-pulse' : ''}>
+                {loadingNamespaces ? (
+                  <div className="flex items-center gap-1">
+                    <Activity className="h-3 w-3 animate-spin" />
+                    Loading...
+                  </div>
+                ) : (
+                  `${namespaces.length} namespace${namespaces.length !== 1 ? 's' : ''}`
+                )}
               </Badge>
-              <Badge variant="outline">
-                {pods.length} pod{pods.length !== 1 ? 's' : ''}
+              <Badge variant="outline" className={loadingPods ? 'animate-pulse' : ''}>
+                {loadingPods ? (
+                  <div className="flex items-center gap-1">
+                    <Activity className="h-3 w-3 animate-spin" />
+                    Loading...
+                  </div>
+                ) : (
+                  `${pods.length} pod${pods.length !== 1 ? 's' : ''}`
+                )}
               </Badge>
             </div>
           </div>
@@ -502,7 +597,53 @@ function App() {
                 {error && (
                   <Alert className="border-red-200 bg-red-50">
                     <AlertCircle className="h-4 w-4" />
-                    <AlertDescription className="text-red-700">{error}</AlertDescription>
+                    <AlertDescription className="text-red-700">
+                      <div className="space-y-2">
+                        <div className="font-medium">
+                          {error.includes('ECONNREFUSED') || error.includes('connection refused') 
+                            ? 'Kubernetes Cluster Connection Failed'
+                            : error.includes('No kubeconfig loaded')
+                            ? 'No Configuration Active'
+                            : 'Error Loading Data'
+                          }
+                        </div>
+                        <div className="text-sm">
+                          {error.includes('ECONNREFUSED') || error.includes('connection refused') 
+                            ? 'Cannot connect to your Kubernetes cluster. Please check that your cluster is running and accessible.'
+                            : error.includes('No kubeconfig loaded')
+                            ? 'Please upload and activate a kubeconfig file from the sidebar.'
+                            : error
+                          }
+                        </div>
+                        {(error.includes('ECONNREFUSED') || error.includes('connection refused')) && (
+                          <div className="mt-3 space-y-1 text-xs">
+                            <div><strong>Troubleshooting tips:</strong></div>
+                            <div>• Check if your Kubernetes cluster is running</div>
+                            <div>• Verify your kubeconfig file is valid and up-to-date</div>
+                            <div>• Ensure you have network access to the cluster</div>
+                            <div>• Try running: <code className="bg-gray-100 px-1 rounded">kubectl get pods</code> in your terminal</div>
+                          </div>
+                        )}
+                        <div className="mt-3">
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => {
+                              setError('');
+                              if (activeKubeconfig) {
+                                fetchNamespaces();
+                                fetchPods();
+                              }
+                            }}
+                            disabled={loading || loadingPods || loadingNamespaces}
+                            className="bg-white hover:bg-gray-50"
+                          >
+                            <RefreshCw className={`h-4 w-4 mr-2 ${(loading || loadingPods || loadingNamespaces) ? 'animate-spin' : ''}`} />
+                            Retry Connection
+                          </Button>
+                        </div>
+                      </div>
+                    </AlertDescription>
                   </Alert>
                 )}
 
@@ -510,6 +651,8 @@ function App() {
                   pods={pods}
                   namespaces={namespaces}
                   loading={loading}
+                  loadingPods={loadingPods}
+                  loadingNamespaces={loadingNamespaces}
                   onPortForward={handlePortForward}
                   onViewLogs={handleViewLogs}
                   onViewAggregateLogs={handleViewAggregateLogs}

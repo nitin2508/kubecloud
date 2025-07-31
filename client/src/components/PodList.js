@@ -18,7 +18,7 @@ import {
   Users
 } from 'lucide-react';
 
-const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewAggregateLogs, onUpdateDeployment, onNamespaceChange }) => {
+const PodList = ({ pods, namespaces, loading, loadingPods, loadingNamespaces, onPortForward, onViewLogs, onViewAggregateLogs, onUpdateDeployment, onNamespaceChange }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedNamespace, setSelectedNamespace] = useState('all');
   const [filteredPods, setFilteredPods] = useState([]);
@@ -90,13 +90,18 @@ const PodList = ({ pods, namespaces, loading, onPortForward, onViewLogs, onViewA
     ...namespaces.map(ns => ({ value: ns.name, label: ns.name }))
   ];
 
-  if (loading) {
+  // Show loading state when either general loading or specific pod loading is active
+  if (loading || loadingPods) {
     return (
       <Card>
         <CardContent className="flex items-center justify-center py-8">
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 animate-spin" />
-            <span>Loading pods...</span>
+            <span>
+              {loadingPods ? 'Loading pods...' : 
+               loadingNamespaces ? 'Loading namespaces...' : 
+               'Loading...'}
+            </span>
           </div>
         </CardContent>
       </Card>
