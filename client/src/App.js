@@ -79,7 +79,6 @@ function App() {
   // Note: In development mode with React.StrictMode, this will run twice
   // The ref guards above prevent actual duplicate API calls
   useEffect(() => {
-    console.log('App mounted - fetching initial data');
     fetchKubeconfigs();
     fetchPortForwards();
   }, []);
@@ -177,14 +176,12 @@ function App() {
 
   const fetchPortForwards = async (silent = false) => {
     if (fetchingPortForwards.current && !silent) {
-      console.log('fetchPortForwards already in progress, skipping');
       return;
     }
     
     try {
       if (!silent) {
         fetchingPortForwards.current = true;
-        console.log('Starting fetchPortForwards');
         setIsRefreshingPortForwards(true);
       }
       
@@ -207,7 +204,6 @@ function App() {
     } finally {
       if (!silent) {
         fetchingPortForwards.current = false;
-        console.log('Finished fetchPortForwards');
         setIsRefreshingPortForwards(false);
       }
     }
@@ -221,13 +217,11 @@ function App() {
     if (!activeKubeconfig) return;
     
     if (fetchingNamespaces.current) {
-      console.log('fetchNamespaces already in progress, skipping');
       return;
     }
     
     try {
       fetchingNamespaces.current = true;
-      console.log('Starting fetchNamespaces');
       setLoadingNamespaces(true);
       setLoading(true);
       const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
@@ -262,7 +256,6 @@ function App() {
       setNamespaces([]);
     } finally {
       fetchingNamespaces.current = false;
-      console.log('Finished fetchNamespaces');
       setLoadingNamespaces(false);
       setLoading(false);
     }
@@ -272,13 +265,11 @@ function App() {
     if (!activeKubeconfig) return;
     
     if (fetchingPods.current) {
-      console.log('fetchPods already in progress, skipping');
       return;
     }
     
     try {
       fetchingPods.current = true;
-      console.log('Starting fetchPods');
       setLoadingPods(true);
       setLoading(true);
       const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
@@ -324,7 +315,6 @@ function App() {
       setConnectionStatus('error');
     } finally {
       fetchingPods.current = false;
-      console.log('Finished fetchPods');
       setLoadingPods(false);
       setLoading(false);
     }
