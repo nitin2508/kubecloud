@@ -1,3 +1,10 @@
+/**
+ * KubeCloud - Kubernetes Management Web Application
+ * 
+ * This component implements duplicate API call prevention using refs to track
+ * ongoing requests. This prevents issues with React.StrictMode in development
+ * which intentionally double-invokes effects to detect side effects.
+ */
 import React, { useState, useEffect, useRef } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
