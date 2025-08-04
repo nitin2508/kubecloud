@@ -1,0 +1,37 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="120" fill="#326CE5" stroke="#ffffff" stroke-width="8"/>
+  
+  <!-- Cloud shape -->
+  <path d="M80 140 Q80 120 100 120 Q110 100 130 100 Q150 100 160 120 Q180 120 180 140 Q180 160 160 160 L100 160 Q80 160 80 140 Z" 
+        fill="#ffffff" opacity="0.9"/>
+  
+  <!-- Kubernetes wheel/helm -->
+  <g transform="translate(128,128)">
+    <!-- Center circle -->
+    <circle r="12" fill="#ffffff"/>
+    
+    <!-- Spokes -->
+    <g stroke="#ffffff" stroke-width="6" stroke-linecap="round">
+      <line x1="0" y1="-35" x2="0" y2="-20"/>
+      <line x1="30" y1="-17" x2="17" y2="-10"/>
+      <line x1="30" y1="17" x2="17" y2="10"/>
+      <line x1="0" y1="35" x2="0" y2="20"/>
+      <line x1="-30" y1="17" x2="-17" y2="10"/>
+      <line x1="-30" y1="-17" x2="-17" y2="-10"/>
+    </g>
+    
+    <!-- Outer ring segments -->
+    <g fill="#ffffff">
+      <circle cx="0" cy="-35" r="4"/>
+      <circle cx="30" cy="-17" r="4"/>
+      <circle cx="30" cy="17" r="4"/>
+      <circle cx="0" cy="35" r="4"/>
+      <circle cx="-30" cy="17" r="4"/>
+      <circle cx="-30" cy="-17" r="4"/>
+    </g>
+  </g>
+  
+  <!-- Subtitle text -->
+  <text x="128" y="220" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#326CE5">KubeCloud</text>
+</svg>

@@ -1,19 +1,85 @@
 {
   "name": "kubecloud",
   "version": "1.0.0",
-  "description": "Kubernetes management web application",
-  "main": "server/index.js",
+  "description": "Kubernetes management desktop application",
+  "main": "desktop/main.js",
+  "homepage": "./",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "cd server && npm run dev",
     "client": "cd client && npm start",
     "build": "cd client && npm run build",
-    "install-all": "npm install && cd server && npm install && cd ../client && npm install"
+    "install-all": "npm install && cd server && npm install && cd ../client && npm install",
+    "electron": "electron .",
+    "electron-dev": "concurrently \"npm run server\" \"wait-on http://localhost:3000 && electron .\"",
+    "build-electron": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder --publish=never",
+    "dist-clean": "rm -rf dist && npm run dist",
+    "dist-unsigned": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --publish=never",
+    "dist-adhoc": "npm run build && electron-builder --publish=never --mac.identity='-'",
+    "dist-production": "npm run build && electron-builder --publish=never"
+  },
+  "build": {
+    "appId": "com.kubecloud.app",
+    "productName": "KubeCloud",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/",
+      "server/",
+      "client/build/",
+      "node_modules/",
+      "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "server/node_modules",
+        "to": "Resources/app.asar.unpacked/server/node_modules",
+        "filter": ["**/*"]
+      }
+    ],
+    "asarUnpack": [
+      "server/**/*"
+    ],
+    "mac": {
+      "icon": "desktop/assets/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "sign": false
+    }
+  },
+  "dependencies": {
+    "@kubernetes/client-node": "^0.20.0",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "fs-extra": "^11.1.1",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "@electron/notarize": "^2.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4",
+    "wait-on": "^7.0.1"
   },
-  "keywords": ["kubernetes", "web", "management"],
+  "keywords": ["kubernetes", "desktop", "management", "electron"],
   "author": "",
   "license": "MIT"
 }
